@@ -1,4 +1,1447 @@
 <!DOCTYPE html>
-<html><head><title>Test</title></head>
-<body><h1>Hello - it works!</h1></body>
+<html lang="en">
+<head>
+  <meta charset="UTF-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover"/>
+  <meta name="apple-mobile-web-app-capable" content="yes"/>
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent"/>
+  <meta name="apple-mobile-web-app-title" content="My Kitchen"/>
+  <meta name="theme-color" content="#111111"/>
+  <title>My Kitchen</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body { background: #111; font-family: 'DM Sans', sans-serif; }
+    #root { min-height: 100vh; }
+    @keyframes spin { to { transform: rotate(360deg); } }
+  </style>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.production.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.23.5/babel.min.js"></script>
+</head>
+<body>
+  <div id="root"></div>
+  <script type="text/babel" data-presets="react">
+
+// ── Storage keys ──────────────────────────────────────────────────────────
+const RECIPES_KEY      = "recipePlanner_recipes";
+const CURRENT_PLAN_KEY = "recipePlanner_currentPlan";
+const UPCOMING_PLAN_KEY= "recipePlanner_upcomingPlan";
+const SHOPPING_KEY     = "recipePlanner_shopping";
+const FAMILY_KEY       = "recipePlanner_family";
+const FREEZER_KEY      = "recipePlanner_freezer";
+const PREFS_KEY        = "recipePlanner_prefs";
+const FAVOURITES_KEY   = "recipePlanner_favourites";
+const ITEM_PREFS_KEY   = "recipePlanner_itemPrefs";
+const WEEK_START_KEY   = "recipePlanner_weekStart";
+const PANTRY_KEY       = "recipePlanner_pantry";
+const CATEGORIES_KEY   = "recipePlanner_categories";
+const API_KEY_KEY      = "recipePlanner_apiKey";
+
+// ── localStorage helpers (replaces window.storage) ───────────────────────
+const storage = {
+  get: (key) => {
+    try { const v = localStorage.getItem(key); return v ? { value: v } : null; }
+    catch { return null; }
+  },
+  set: (key, value) => {
+    try { localStorage.setItem(key, value); return true; }
+    catch { return null; }
+  },
+};
+
+
+// ── Storage keys ──────────────────────────────────────────────────────────
+
+const ALL_DAYS  = ["Monday","Tuesday","Wednesday","Thursday","Friday","Saturday","Sunday"];
+const WEEKDAYS  = ["Monday","Tuesday","Wednesday","Thursday","Friday"];
+const TIME_SLOTS= [
+  { label:"Quick",   sublabel:"< 30 min",    max:30,  color:"#4ade80" },
+  { label:"Medium",  sublabel:"30–45 min",   max:45,  color:"#fbbf24" },
+  { label:"Relaxed", sublabel:"Up to 1 hr+", max:120, color:"#f87171" },
+];
+const SUITABILITY = [
+  { key:"yes", label:"✓ Loves it",    color:"#4ade80", bg:"#052e16" },
+  { key:"ok",  label:"~ Will eat it", color:"#fbbf24", bg:"#2d1f00" },
+  { key:"no",  label:"✗ Won't eat",   color:"#f87171", bg:"#2d0a0a" },
+];
+const DEFAULT_FAMILY = [
+  { id:"adult1", name:"Adult 1", emoji:"🧑", type:"adult" },
+  { id:"adult2", name:"Adult 2", emoji:"🧑", type:"adult" },
+  { id:"child1", name:"Child",   emoji:"🧒", type:"child" },
+];
+const DEFAULT_PREFS = {
+  avoidConsecutivePasta:true, avoidConsecutiveRice:true,
+  matchSchoolMeals:true, notes:"",
+  avoidPreviousWeekMeals:false,
+  limitMeatRepeat:false,
+  mondayPrawns:false,
+  avoidConsecutivePotato:false,
+  prioritiseMissedMeals:false,
+  fridayTakeaway:false,
+  customRules:[], // [{ id, text, enabled }]
+};
+const DEFAULT_CATEGORIES = ["Fruit & Veg","Meat & Fish","Dairy","Bakery","Tins & Jars","Dry Goods","Drinks","Snacks","Frozen","Cleaning","Other"];
+
+function orderedDays(startDay) {
+  const idx = ALL_DAYS.indexOf(startDay);
+  if (idx < 0) return ALL_DAYS;
+  return [...ALL_DAYS.slice(idx), ...ALL_DAYS.slice(0, idx)];
+}
+function timeLabel(m) {
+  if (!m) return "?";
+  if (m < 60) return `${m} min`;
+  return `${Math.floor(m/60)}h${m%60?` ${m%60}m`:""}`;
+}
+async function callClaude(system, user, imageBase64=null, mediaType=null) {
+  const content = [];
+  if (imageBase64) content.push({ type:"image", source:{ type:"base64", media_type:mediaType||"image/jpeg", data:imageBase64 }});
+  content.push({ type:"text", text:user });
+  const apiKey = localStorage.getItem(API_KEY_KEY)||""
+  if (!apiKey) throw new Error("No API key set — please add your Anthropic API key in Settings.")
+  const res = await fetch("https://api.anthropic.com/v1/messages", {
+    method:"POST",
+    headers:{ "Content-Type":"application/json", "x-api-key": apiKey, "anthropic-version":"2023-06-01", "anthropic-dangerous-direct-browser-access":"true" },
+    body:JSON.stringify({ model:"claude-sonnet-4-20250514", max_tokens:1500, system, messages:[{ role:"user", content }] }),
+  });
+  const data = await res.json();
+  if (data.error) throw new Error(data.error.message||"API error")
+  return data.content?.map(b=>b.text||"").join("")||"";
+}
+
+// ── Root ──────────────────────────────────────────────────────────────────
+export default function App() {
+  const [tab, setTab]               = useState("current");
+  const [recipes, setRecipes]       = useState([]);
+  const [currentPlan, setCurrentPlan]   = useState({ plan:{}, schedule:{}, diners:{}, schoolMeals:{} });
+  const [upcomingPlan, setUpcomingPlan] = useState({ plan:{}, schedule:{}, diners:{}, schoolMeals:{} });
+  const [shopping, setShopping]     = useState([]);
+  const [favourites, setFavourites] = useState([]);
+  const [itemPrefs, setItemPrefs]   = useState({});
+  const [family, setFamily]         = useState(DEFAULT_FAMILY);
+  const [freezer, setFreezer]       = useState([]);
+  const [prefs, setPrefs]           = useState(DEFAULT_PREFS);
+  const [weekStart, setWeekStart]   = useState("Tuesday");
+  const [pantry, setPantry]         = useState([]);
+  const [categories, setCategories] = useState(DEFAULT_CATEGORIES);
+  const [loading, setLoading]       = useState(true);
+  const [toast, setToast]           = useState(null);
+  const [apiKey, setApiKey]         = useState("");
+  const [showApiSetup, setShowApiSetup] = useState(false);
+
+  useEffect(() => {
+    async function load() {
+      const tryGet = async key => { try { const r = storage.get(key); return r ? JSON.parse(r.value) : null; } catch { return null; } };
+      const r  = await tryGet(RECIPES_KEY);      if (r)  setRecipes(r);
+      const f  = await tryGet(FAMILY_KEY);       if (f)  setFamily(f);
+      const fr = await tryGet(FREEZER_KEY);      if (fr) setFreezer(fr);
+      const p  = await tryGet(PREFS_KEY);        if (p)  setPrefs({...DEFAULT_PREFS,...p, customRules: p.customRules||[]});
+      const s  = await tryGet(SHOPPING_KEY);     if (s)  setShopping(s);
+      const fv = await tryGet(FAVOURITES_KEY);   if (fv) setFavourites(fv);
+      const ip = await tryGet(ITEM_PREFS_KEY);   if (ip) setItemPrefs(ip);
+      const ws = await tryGet(WEEK_START_KEY);   if (ws) setWeekStart(ws);
+      const cp = await tryGet(CURRENT_PLAN_KEY); if (cp) setCurrentPlan(cp);
+      const up = await tryGet(UPCOMING_PLAN_KEY);if (up) setUpcomingPlan(up);
+      const pa = await tryGet(PANTRY_KEY);       if (pa) setPantry(pa);
+      const ca = await tryGet(CATEGORIES_KEY);   if (ca) setCategories(ca);
+      const ak = localStorage.getItem(API_KEY_KEY); if (ak) setApiKey(ak);
+      setLoading(false);
+    }
+    load();
+  }, []);
+
+  const persist     = async (key, val) => { storage.set(key, JSON.stringify(val)); };
+  const saveRecipes    = async u => { setRecipes(u);    await persist(RECIPES_KEY,u); };
+  const saveShopping   = async u => { setShopping(u);   await persist(SHOPPING_KEY,u); };
+  const saveFavourites = async u => { setFavourites(u); await persist(FAVOURITES_KEY,u); };
+  const saveFamily     = async u => { setFamily(u);     await persist(FAMILY_KEY,u); };
+  const saveFreezer    = async u => { setFreezer(u);    await persist(FREEZER_KEY,u); };
+  const savePrefs      = async u => { setPrefs(u);      await persist(PREFS_KEY,u); };
+  const saveItemPrefs  = async u => { setItemPrefs(u);  await persist(ITEM_PREFS_KEY,u); };
+  const saveWeekStart  = async u => { setWeekStart(u);  await persist(WEEK_START_KEY,u); };
+  const savePantry     = async u => { setPantry(u);     await persist(PANTRY_KEY,u); };
+  const saveCategories = async u => { setCategories(u); await persist(CATEGORIES_KEY,u); };
+  const saveCurrentPlan  = async u => { setCurrentPlan(u);  await persist(CURRENT_PLAN_KEY,u); };
+  const saveUpcomingPlan = async u => { setUpcomingPlan(u); await persist(UPCOMING_PLAN_KEY,u); };
+
+  const showToast = (msg, color="#4ade80") => { setToast({msg,color}); setTimeout(()=>setToast(null),2800); };
+
+  const learnItemPref = async (text, section) => {
+    if (section==="unsorted") return;
+    const updated = {...itemPrefs, [text.toLowerCase().trim()]: section};
+    await saveItemPrefs(updated);
+  };
+  const classifyItem = (text) => {
+    const key = text.toLowerCase().trim();
+    if (itemPrefs[key]) return itemPrefs[key];
+    for (const [k,v] of Object.entries(itemPrefs)) { if (key.includes(k)||k.includes(key)) return v; }
+    return "unsorted";
+  };
+  // Filter out items already in pantry when building shopping list
+  const filterPantry = (items) => {
+    if (!pantry.length) return items;
+    return items.filter(item => !pantry.some(p => item.text.toLowerCase().includes(p.text.toLowerCase()) || p.text.toLowerCase().includes(item.text.toLowerCase())));
+  };
+
+  if (loading) return (
+    <div style={S.loadingScreen}><div style={S.spinner}/><p style={{color:"#a89f8c",marginTop:"1rem",fontFamily:"Georgia,serif"}}>Loading your kitchen…</p></div>
+  );
+
+  const DAYS = orderedDays(weekStart);
+  const tabs = [
+    ["current","📅 This Week"],["upcoming","🗓 Next Week"],["recipes","📖 Recipes"],
+    ["shopping","🛒 Shopping"],["freezer","🧊 Freezer"],["family","👨‍👩‍👧 Family"],["prefs","⚙️ Settings"],
+  ];
+  const planProps = { recipes, family, prefs, freezer, showToast, DAYS, classifyItem, filterPantry };
+
+  return (
+    <div style={S.app}>
+      <link href="https://fonts.googleapis.com/css2?family=Playfair+Display:ital,wght@0,400;0,700;1,400&family=DM+Sans:wght@300;400;500&display=swap" rel="stylesheet"/>
+      {toast && <div style={{...S.toast,background:toast.color}}>{toast.msg}</div>}
+
+      {showApiSetup && (
+        <div style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.85)",zIndex:9998,display:"flex",alignItems:"center",justifyContent:"center",padding:"1rem"}}>
+          <div style={{background:"#1a1a1a",borderRadius:"16px",padding:"2rem",maxWidth:"440px",width:"100%",border:"1px solid #333"}}>
+            <h2 style={{fontFamily:"'Playfair Display',serif",color:"#f5f0e8",margin:"0 0 0.75rem",fontWeight:"400"}}>Anthropic API Key</h2>
+            <p style={{color:"#a89f8c",fontSize:"0.88rem",lineHeight:1.6,margin:"0 0 0.5rem"}}>
+              Required for recipe import (URL/photo) and meal plan generation.
+            </p>
+            <p style={{color:"#666",fontSize:"0.82rem",margin:"0 0 0.25rem"}}>Get a free key at <strong style={{color:"#c9a84c"}}>console.anthropic.com</strong> → API Keys.</p>
+            <p style={{color:"#555",fontSize:"0.78rem",margin:"0 0 1rem"}}>Stored locally in your browser only — never shared.</p>
+            <input value={apiKey} onChange={e=>setApiKey(e.target.value)} placeholder="sk-ant-api03-..." type="password"
+              style={{...S.input,marginBottom:"1rem",fontFamily:"monospace",fontSize:"0.85rem"}}/>
+            <div style={{display:"flex",gap:"0.5rem",flexWrap:"wrap"}}>
+              <button onClick={()=>{ localStorage.setItem(API_KEY_KEY,apiKey); setShowApiSetup(false); showToast("API key saved ✓"); }} style={S.primaryBtn}>Save Key</button>
+              <button onClick={()=>setShowApiSetup(false)} style={{...S.smallBtn,background:"#333",color:"#aaa"}}>Cancel</button>
+              {apiKey && <button onClick={()=>{ localStorage.removeItem(API_KEY_KEY); setApiKey(""); setShowApiSetup(false); showToast("Key removed","#f87171"); }} style={{...S.smallBtn,background:"transparent",color:"#f87171",border:"1px solid #f87171"}}>Remove Key</button>}
+            </div>
+          </div>
+        </div>
+      )}
+
+      <header style={S.header}>
+        <div style={{display:"flex",justifyContent:"flex-end",padding:"0.5rem 1rem 0"}}>
+          <button onClick={()=>setShowApiSetup(true)}
+            style={{background:"transparent",border:"1px solid",borderColor:apiKey?"#4ade80":"#f87171",borderRadius:"6px",padding:"0.25rem 0.75rem",cursor:"pointer",fontFamily:"inherit",fontSize:"0.75rem",color:apiKey?"#4ade80":"#f87171"}}>
+            {apiKey ? "🔑 API Key ✓" : "🔑 Set API Key"}
+          </button>
+        </div>
+        <h1 style={S.title}>My Kitchen</h1>
+        <nav style={S.nav}>
+          {tabs.map(([k,l])=>(
+            <button key={k} onClick={()=>setTab(k)} style={{...S.navBtn,...(tab===k?S.navBtnActive:{})}}>{l}</button>
+          ))}
+        </nav>
+      </header>
+      <main style={S.main}>
+        {tab==="current"  && <PlannerTab {...planProps} planData={currentPlan} savePlan={saveCurrentPlan} saveShopping={saveShopping} isCurrentWeek={true} label="This Week"/>}
+        {tab==="upcoming" && <PlannerTab {...planProps} planData={upcomingPlan} savePlan={saveUpcomingPlan} saveShopping={saveShopping} isCurrentWeek={false} label="Next Week"
+            onPromoteToCurrentWeek={async()=>{ await saveCurrentPlan(upcomingPlan); await saveUpcomingPlan({plan:{},schedule:{},diners:{},schoolMeals:{}}); setTab("current"); showToast("Moved to This Week ✓"); }}/>}
+        {tab==="recipes"  && <RecipesTab recipes={recipes} saveRecipes={saveRecipes} family={family} showToast={showToast}/>}
+        {tab==="shopping" && <ShoppingTab shopping={shopping} saveShopping={saveShopping} favourites={favourites} saveFavourites={saveFavourites} itemPrefs={itemPrefs} learnItemPref={learnItemPref} classifyItem={classifyItem} pantry={pantry} savePantry={savePantry} categories={categories} showToast={showToast}/>}
+        {tab==="freezer"  && <FreezerTab freezer={freezer} saveFreezer={saveFreezer} showToast={showToast}/>}
+        {tab==="family"   && <FamilyTab family={family} saveFamily={saveFamily} showToast={showToast}/>}
+        {tab==="prefs"    && <SettingsTab prefs={prefs} savePrefs={savePrefs} weekStart={weekStart} saveWeekStart={saveWeekStart} itemPrefs={itemPrefs} saveItemPrefs={saveItemPrefs} categories={categories} saveCategories={saveCategories} showToast={showToast}/>}
+      </main>
+    </div>
+  );
+}
+
+// ── Planner Tab ───────────────────────────────────────────────────────────
+function PlannerTab({ recipes, family, prefs, freezer, showToast, DAYS, planData, savePlan, saveShopping, classifyItem, filterPantry, isCurrentWeek, label, onPromoteToCurrentWeek }) {
+  const [localSchedule, setLocalSchedule] = useState(planData.schedule||{});
+  const [localDiners, setLocalDiners]     = useState(()=>{ const d={}; DAYS.forEach(day=>{d[day]=(planData.diners||{})[day]||family.map(m=>m.id);}); return d; });
+  const [localSchool, setLocalSchool]     = useState(planData.schoolMeals||{});
+  const [localPlan, setLocalPlan]         = useState(planData.plan||{});
+  const [generating, setGenerating]       = useState(false);
+  const [step, setStep]                   = useState(Object.keys(planData.plan||{}).length>0?"plan":"schedule");
+  // Override state: which day is being overridden
+  const [overrideDay, setOverrideDay]     = useState(null);
+  const [overrideUpdating, setOverrideUpdating] = useState(false);
+  const [manualMealVal, setManualMealVal] = useState("");
+  // extraPeople: { Monday: 0, Tuesday: 2, … } — additional guests beyond the household
+  const [extraPeople, setExtraPeople]     = useState(planData.extraPeople||{});
+
+  useEffect(()=>{
+    setLocalSchedule(planData.schedule||{});
+    setLocalDiners(()=>{ const d={}; DAYS.forEach(day=>{d[day]=(planData.diners||{})[day]||family.map(m=>m.id);}); return d; });
+    setLocalSchool(planData.schoolMeals||{});
+    setLocalPlan(planData.plan||{});
+    setExtraPeople(planData.extraPeople||{});
+    setStep(Object.keys(planData.plan||{}).length>0?"plan":"schedule");
+  },[planData]);
+
+  const toggleDiner = (day,mid) => setLocalDiners(p=>{ const cur=p[day]||[]; return {...p,[day]:cur.includes(mid)?cur.filter(x=>x!==mid):[...cur,mid]}; });
+
+  // Build ingredients for a single recipe name
+  const getIngredientsFor = (mealName) => {
+    if (!mealName || mealName==="—" || mealName.startsWith("🧊")) return [];
+    const r = recipes.find(r => mealName.toLowerCase().includes(r.name.toLowerCase()) || r.name.toLowerCase().includes(mealName.toLowerCase()));
+    return r?.ingredients || [];
+  };
+
+  // Rebuild shopping list from a full plan, scaling for extra people per day
+  const rebuildShopping = async (plan, ep=extraPeople) => {
+    const allMeals = Object.values(plan).filter(n=>n&&n!=="—"&&!n.startsWith("🧊"));
+    const matched = recipes.filter(r=>allMeals.some(n=>n.toLowerCase().includes(r.name.toLowerCase())||r.name.toLowerCase().includes(n.toLowerCase())));
+    // Build ingredient list — if a meal has extra people that day, note the scaling
+    const ingredientMap = {}; // text -> max multiplier needed
+    matched.forEach(r=>{
+      // find which days use this recipe
+      const days = DAYS.filter(d=> plan[d] && (plan[d].toLowerCase().includes(r.name.toLowerCase())||r.name.toLowerCase().includes(plan[d].toLowerCase())));
+      const maxExtra = Math.max(0, ...days.map(d=>ep[d]||0));
+      const baseServings = family.length; // rough household size
+      const totalServings = baseServings + maxExtra;
+      const multiplier = maxExtra>0 ? (totalServings/baseServings) : 1;
+      (r.ingredients||[]).forEach(ing=>{
+        const key = ing.toLowerCase();
+        if (!ingredientMap[key] || multiplier > ingredientMap[key].multiplier) {
+          ingredientMap[key] = { text:ing, multiplier };
+        }
+      });
+    });
+    const raw = Object.values(ingredientMap).map(({text, multiplier})=>({
+      id: Date.now().toString()+Math.random(),
+      text: multiplier>1 ? `${text} ×${multiplier.toFixed(1).replace(/\.0$/,"")} (guests)` : text,
+      section: classifyItem(text),
+      checked: false,
+    }));
+    const filtered = filterPantry(raw);
+    await saveShopping(filtered);
+  };
+
+  // Override a single day's meal
+  const handleOverride = async (day, newMealName) => {
+    setOverrideUpdating(true);
+    const newPlan = {...localPlan, [day]: newMealName};
+    setLocalPlan(newPlan);
+    setOverrideDay(null);
+    setManualMealVal("");
+    const newPlanData = { plan:newPlan, schedule:localSchedule, diners:localDiners, schoolMeals:localSchool, extraPeople };
+    await savePlan(newPlanData);
+    await rebuildShopping(newPlan);
+    showToast("Meal updated & shopping list refreshed ✓");
+    setOverrideUpdating(false);
+  };
+
+  // Update extra people for a day
+  const setDayExtraPeople = async (day, val) => {
+    const n = Math.max(0, parseInt(val)||0);
+    const updated = {...extraPeople, [day]: n};
+    setExtraPeople(updated);
+    // Persist and rebuild shopping if plan exists
+    if (Object.keys(localPlan).length>0) {
+      const newPlanData = { plan:localPlan, schedule:localSchedule, diners:localDiners, schoolMeals:localSchool, extraPeople:updated };
+      await savePlan(newPlanData);
+      await rebuildShopping(localPlan, updated);
+      if (n>0) showToast(`+${n} guest${n>1?"s":""} — shopping list updated`);
+    }
+  };
+
+  const generatePlan = async () => {
+    if (recipes.length===0) { showToast("Add some recipes first!","#f87171"); return; }
+    setGenerating(true);
+    try {
+      const child = family.find(m=>m.type==="child");
+      const dayInfo = DAYS.map(day=>{
+        // slots is now an array; fall back to single string for old data
+        const rawSlots = localSchedule[day];
+        const slots = Array.isArray(rawSlots) ? rawSlots : (rawSlots ? [rawSlots] : []);
+        const maxTime = slots.length>0 ? Math.max(...slots.map(s=>TIME_SLOTS.find(t=>t.label===s)?.max||30)) : 120;
+        const eating  = localDiners[day]||family.map(m=>m.id);
+        const eligible= recipes.filter(r=>eating.every(mid=>(r.suitability?.[mid]||"yes")!=="no"));
+        const schoolMeal = WEEKDAYS.includes(day)?(localSchool[day]||""):"";
+        return { day, slots, maxTime, eating, eligible, schoolMeal };
+      });
+      const freezerStr = freezer.length>0?`\nFreezer available: ${freezer.map(f=>`${f.name} (${f.qty} ${f.unit})`).join(", ")}\n`:"";
+      // Previous week meals — passed in via planData.previousWeekMeals if available
+      const prevMeals = (planData.previousWeekMeals||[]).filter(Boolean);
+      const prevMealsStr = prevMeals.length>0?prevMeals.join(", "):"";
+      const builtinRules = [
+        prefs.avoidConsecutivePasta&&"- No pasta-based meals on consecutive nights",
+        prefs.avoidConsecutiveRice&&"- No rice-based meals on consecutive nights",
+        prefs.avoidConsecutivePotato&&"- No potato-based meals on consecutive nights",
+        prefs.matchSchoolMeals&&child&&"- Avoid dinner with same main carb as child's school lunch that day",
+        prefs.avoidPreviousWeekMeals&&prevMealsStr&&`- Do NOT use any of these meals that were planned last week: ${prevMealsStr}`,
+        prefs.limitMeatRepeat&&"- Do not use the same type of meat (e.g. chicken, beef, pork, lamb) more than 3 times across the whole week",
+        prefs.mondayPrawns&&`- On ${DAYS[DAYS.length-1]==="Monday"?DAYS[DAYS.length-1]:"Monday"}, use a prawn or seafood dish (frozen prawns are available)`,
+        prefs.prioritiseMissedMeals&&"- If a family member is not eating on a given night, prioritise recipes that they cannot eat (marked as 'won't eat') so those meals are used on nights they're absent",
+        prefs.fridayTakeaway&&"- Plan Friday as Takeaway night — assign "🍕 Takeaway" to Friday and do not assign a recipe for that night",
+        prefs.notes&&`- Extra: ${prefs.notes}`,
+      ].filter(Boolean);
+      const customRules = (prefs.customRules||[]).filter(r=>r.enabled).map(r=>`- ${r.text}`);
+      const allRules = [...builtinRules, ...customRules].join("\n");
+      const recipeListStr = dayInfo.map(d=>{
+        const names = d.eligible.map(r=>`  - ${r.name} (${r.cookTime}min, carb:${r.mainCarb||"none"})`).join("\n");
+        const eatingNames = d.eating.map(id=>family.find(m=>m.id===id)?.name||id).join(", ");
+        const schoolNote = d.schoolMeal?`  School lunch: "${d.schoolMeal}"`:"";
+        return `${d.day} [UP TO ${d.maxTime}min — any shorter meal is fine too, eating:${eatingNames}]:\n${schoolNote}\n${names||"  (no suitable recipes)"}`;
+      }).join("\n\n");
+      const dayKeys = DAYS.map(d=>d.toLowerCase());
+      const system = `You are a meal planner. Return ONLY valid JSON, no markdown:\n{${dayKeys.map(d=>`"${d}":"recipe name"`).join(",")}}\nRules:\n${allRules}\n- Only use eligible recipes per day\n- The time shown per day is a MAXIMUM — shorter meals are always acceptable\n- Vary meals across week; prefer variety in cook times too\n- Freezer meals ok (prefix "🧊 ")\n- Use "—" if nothing fits`;
+      const raw  = await callClaude(system,`Plan 7 dinners for ${label}.\n${freezerStr}\n${recipeListStr}`);
+      const plan = JSON.parse(raw.replace(/```json|```/g,"").trim());
+      const normalised = {};
+      DAYS.forEach(d=>{ normalised[d]=plan[d.toLowerCase()]||plan[d]||"—"; });
+      // For the upcoming plan, record current week's meals so next generation can avoid repeats
+      const previousWeekMeals = !isCurrentWeek
+        ? [] // upcoming plan doesn't need to track its own prev week here; that comes from current
+        : Object.values(normalised).filter(n=>n&&n!=="—"&&!n.startsWith("🧊"));
+      const newPlanData = { plan:normalised, schedule:localSchedule, diners:localDiners, schoolMeals:localSchool, previousWeekMeals, extraPeople };
+      await savePlan(newPlanData);
+      setLocalPlan(normalised);
+      await rebuildShopping(normalised);
+      setStep("plan"); showToast(`${label} plan generated ✓`);
+    } catch(e) { showToast("Couldn't generate plan. Try again.","#f87171"); }
+    setGenerating(false);
+  };
+
+  const clearPlan = async () => {
+    const empty = { plan:{}, schedule:localSchedule, diners:localDiners, schoolMeals:localSchool };
+    await savePlan(empty); setLocalPlan({}); setStep("schedule");
+  };
+
+  return (
+    <div>
+      <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:"1.25rem",flexWrap:"wrap",gap:"0.5rem"}}>
+        <h2 style={{margin:0,fontFamily:"'Playfair Display',serif",fontWeight:"400",fontSize:"1.3rem",color:"#f5f0e8"}}>{label}</h2>
+        {!isCurrentWeek && Object.keys(localPlan).length>0 && onPromoteToCurrentWeek && (
+          <button onClick={onPromoteToCurrentWeek} style={{...S.smallBtn,background:"#1a2e1a",color:"#4ade80",border:"1px solid #4ade80"}}>→ Move to This Week</button>
+        )}
+      </div>
+      <div style={{display:"flex",gap:"0.5rem",marginBottom:"1.5rem",flexWrap:"wrap"}}>
+        {[["schedule","1. Schedule"],["plan","2. View Plan"]].map(([s,l])=>(
+          <button key={s} onClick={()=>setStep(s)} style={{...S.modeBtn,...(step===s?S.modeBtnActive:{})}}>{l}</button>
+        ))}
+      </div>
+
+      {step==="schedule"&&(
+        <div>
+          <p style={{color:"#a89f8c",marginBottom:"1.25rem",fontSize:"0.9rem"}}>Set cooking time, who's eating, and school lunches.</p>
+          <div style={{display:"flex",flexDirection:"column",gap:"0.75rem",marginBottom:"1.5rem"}}>
+            {DAYS.map(day=>{
+              const eating=localDiners[day]||family.map(m=>m.id);
+              const isWeekday=WEEKDAYS.includes(day);
+              return (
+                <div key={day} style={{...S.card,padding:"1rem"}}>
+                  <div style={{fontWeight:"600",color:"#c9a84c",marginBottom:"0.6rem"}}>{day}</div>
+                  <div style={{display:"flex",gap:"0.35rem",flexWrap:"wrap",marginBottom:"0.5rem"}}>
+                    {TIME_SLOTS.map(slot=>{
+                      const rawSlots = localSchedule[day];
+                      const selected = Array.isArray(rawSlots) ? rawSlots : (rawSlots ? [rawSlots] : []);
+                      const on = selected.includes(slot.label);
+                      return (
+                        <button key={slot.label} onClick={()=>{
+                          const rawSlots = localSchedule[day];
+                          const cur = Array.isArray(rawSlots) ? rawSlots : (rawSlots ? [rawSlots] : []);
+                          const next = on ? cur.filter(s=>s!==slot.label) : [...cur, slot.label];
+                          setLocalSchedule(p=>({...p,[day]:next}));
+                        }}
+                          style={{...S.slotBtn,...(on?{background:slot.color,color:"#1a1a2e",borderColor:slot.color}:{})}}>
+                          {slot.label}<span style={{fontSize:"0.68rem",opacity:0.8,display:"block"}}>{slot.sublabel}</span>
+                        </button>
+                      );
+                    })}
+                  </div>
+                  {(()=>{
+                    const rawSlots = localSchedule[day];
+                    const selected = Array.isArray(rawSlots) ? rawSlots : (rawSlots ? [rawSlots] : []);
+                    if (selected.length===0) return null;
+                    const maxTime = Math.max(...selected.map(s=>TIME_SLOTS.find(t=>t.label===s)?.max||30));
+                    return <p style={{fontSize:"0.72rem",color:"#666",margin:"0 0 0.6rem"}}>Any meal up to {maxTime} min</p>;
+                  })()}
+                  <div style={{display:"flex",gap:"0.4rem",flexWrap:"wrap",alignItems:"center",marginBottom:isWeekday?"0.7rem":"0"}}>
+                    <span style={{fontSize:"0.75rem",color:"#666",marginRight:"0.25rem"}}>Eating:</span>
+                    {family.map(m=>{ const on=eating.includes(m.id); return (
+                      <button key={m.id} onClick={()=>toggleDiner(day,m.id)}
+                        style={{display:"flex",alignItems:"center",gap:"0.3rem",padding:"0.25rem 0.6rem",borderRadius:"999px",fontSize:"0.8rem",cursor:"pointer",fontFamily:"inherit",border:"1px solid",borderColor:on?"#c9a84c":"#333",background:on?"#2d2000":"transparent",color:on?"#c9a84c":"#555"}}>
+                        {m.emoji} {m.name}
+                      </button>
+                    );})}
+                  </div>
+                  {isWeekday&&(
+                    <div style={{display:"flex",alignItems:"center",gap:"0.5rem"}}>
+                      <span style={{fontSize:"0.75rem",color:"#666",whiteSpace:"nowrap"}}>🏫 School:</span>
+                      <input value={localSchool[day]||""} onChange={e=>setLocalSchool(p=>({...p,[day]:e.target.value}))}
+                        placeholder="e.g. pasta, pizza…"
+                        style={{...S.input,marginBottom:0,flex:1,fontSize:"0.85rem",padding:"0.35rem 0.65rem"}}/>
+                    </div>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+          <button onClick={generatePlan} disabled={generating||recipes.length===0} style={S.primaryBtn}>
+            {generating?"Generating…":"✨ Generate Plan"}
+          </button>
+          {recipes.length===0&&<p style={{color:"#f87171",fontSize:"0.85rem",marginTop:"0.5rem"}}>Add recipes first.</p>}
+        </div>
+      )}
+
+      {step==="plan"&&(
+        <div>
+          {Object.keys(localPlan).length===0?(
+            <div style={S.emptyState}>
+              <p>No plan yet.</p>
+              <button onClick={()=>setStep("schedule")} style={{...S.primaryBtn,marginTop:"1rem"}}>Set up schedule →</button>
+            </div>
+          ):(
+            <div>
+              {overrideUpdating && <p style={{color:"#fbbf24",fontSize:"0.85rem",marginBottom:"0.75rem"}}>Updating shopping list…</p>}
+              <div style={{display:"flex",flexDirection:"column",gap:"0.65rem",marginBottom:"1.25rem"}}>
+                {DAYS.map(day=>{
+                  const meal=localPlan[day];
+                  const rawSlots = localSchedule[day];
+                  const slots = Array.isArray(rawSlots) ? rawSlots : (rawSlots ? [rawSlots] : []);
+                  const maxTime = slots.length>0 ? Math.max(...slots.map(s=>TIME_SLOTS.find(t=>t.label===s)?.max||30)) : null;
+                  const eating=(localDiners[day]||family.map(m=>m.id)).map(id=>family.find(m=>m.id===id));
+                  const school=WEEKDAYS.includes(day)&&localSchool[day];
+                  const isOverriding = overrideDay===day;
+
+                  return (
+                    <div key={day} style={{...S.card,padding:"0"}}>
+                      {/* Main row */}
+                      <div style={{display:"flex",alignItems:"center",gap:"0.75rem",padding:"0.85rem 1rem"}}>
+                        <div style={{minWidth:"85px"}}>
+                          <div style={{fontWeight:"600",color:"#c9a84c",fontSize:"0.9rem"}}>{day}</div>
+                          {slots.length>0&&(
+                            <div style={{display:"flex",gap:"0.2rem",flexWrap:"wrap",marginTop:"0.2rem"}}>
+                              {slots.sort((a,b)=>TIME_SLOTS.findIndex(t=>t.label===a)-TIME_SLOTS.findIndex(t=>t.label===b)).map(s=>{
+                                const ts=TIME_SLOTS.find(t=>t.label===s);
+                                return <span key={s} style={{fontSize:"0.62rem",color:ts?.color||"#888",background:"#222",borderRadius:"4px",padding:"0.05rem 0.3rem"}}>{s}</span>;
+                              })}
+                            </div>
+                          )}
+                          <div style={{fontSize:"0.8rem",marginTop:"0.2rem"}}>{eating.filter(Boolean).map(m=>m.emoji).join(" ")}
+                            {(extraPeople[day]||0)>0&&<span style={{color:"#60a5fa",marginLeft:"0.25rem"}}>+{extraPeople[day]}👤</span>}
+                          </div>
+                        </div>
+                        <div style={{flex:1}}>
+                          <div style={{color:meal&&meal!=="—"?"#f5f0e8":"#555",fontSize:"0.95rem"}}>{meal||"—"}</div>
+                          {school&&<div style={{fontSize:"0.72rem",color:"#666",marginTop:"0.2rem"}}>🏫 {school}</div>}
+                        </div>
+                        <button onClick={()=>{setOverrideDay(isOverriding?null:day); setManualMealVal("");}}
+                          style={{...S.editTimeBtn,color:isOverriding?"#c9a84c":"#666",borderColor:isOverriding?"#c9a84c":"#333",flexShrink:0}}>
+                          {isOverriding?"Cancel":"Change"}
+                        </button>
+                      </div>
+
+                      {/* Override picker */}
+                      {isOverriding&&(
+                        <div style={{borderTop:"1px solid #2a2a2a",padding:"0.75rem 1rem",background:"#151515"}}>
+                          {/* Extra people */}
+                          <div style={{display:"flex",alignItems:"center",gap:"0.6rem",marginBottom:"0.85rem",flexWrap:"wrap"}}>
+                            <span style={{fontSize:"0.8rem",color:"#a89f8c"}}>👤 Extra guests:</span>
+                            {[0,1,2,3,4,5,6].map(n=>(
+                              <button key={n} onClick={()=>setDayExtraPeople(day,n)}
+                                style={{width:"28px",height:"28px",borderRadius:"6px",border:"1px solid",borderColor:(extraPeople[day]||0)===n?"#60a5fa":"#333",background:(extraPeople[day]||0)===n?"#1a2a3a":"transparent",color:(extraPeople[day]||0)===n?"#60a5fa":"#666",cursor:"pointer",fontFamily:"inherit",fontSize:"0.82rem",fontWeight:(extraPeople[day]||0)===n?"600":"400"}}>
+                                {n}
+                              </button>
+                            ))}
+                          </div>
+
+                          <p style={{color:"#a89f8c",fontSize:"0.8rem",margin:"0 0 0.5rem"}}>Choose a meal for {day}:</p>
+
+                          {/* Manual meal input */}
+                          <div style={{display:"flex",gap:"0.5rem",marginBottom:"0.65rem"}}>
+                            <input value={manualMealVal} onChange={e=>setManualMealVal(e.target.value)}
+                              onKeyDown={e=>e.key==="Enter"&&manualMealVal.trim()&&handleOverride(day,manualMealVal.trim())}
+                              placeholder="Type a custom meal (e.g. Takeaway, Pizza night)…"
+                              style={{...S.input,flex:1,marginBottom:0,fontSize:"0.85rem",padding:"0.4rem 0.65rem"}}/>
+                            <button onClick={()=>manualMealVal.trim()&&handleOverride(day,manualMealVal.trim())} style={S.smallBtn}>Set</button>
+                          </div>
+
+                          <div style={{display:"flex",flexDirection:"column",gap:"0.35rem",maxHeight:"200px",overflowY:"auto"}}>
+                            <button onClick={()=>handleOverride(day,"—")}
+                              style={{...S.overrideOption, borderColor:meal==="—"?"#c9a84c":"#333",color:meal==="—"?"#c9a84c":"#888"}}>
+                              — No meal planned
+                            </button>
+                            {freezer.map(f=>(
+                              <button key={f.id} onClick={()=>handleOverride(day,`🧊 ${f.name}`)}
+                                style={{...S.overrideOption,borderColor:meal===`🧊 ${f.name}`?"#60a5fa":"#333",color:meal===`🧊 ${f.name}`?"#60a5fa":"#a89f8c"}}>
+                                🧊 {f.name} <span style={{fontSize:"0.75rem",opacity:0.7}}>({f.qty} {f.unit})</span>
+                              </button>
+                            ))}
+                            {recipes.map(r=>(
+                              <button key={r.id} onClick={()=>handleOverride(day,r.name)}
+                                style={{...S.overrideOption,borderColor:meal===r.name?"#c9a84c":"#333",color:meal===r.name?"#c9a84c":"#f5f0e8"}}>
+                                {r.name}
+                                <span style={{fontSize:"0.75rem",color:"#666",marginLeft:"0.5rem"}}>⏱{timeLabel(r.cookTime)}</span>
+                              </button>
+                            ))}
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+              <div style={{display:"flex",gap:"0.5rem",flexWrap:"wrap"}}>
+                <button onClick={()=>setStep("schedule")} style={{...S.primaryBtn,background:"#2a2a2a",color:"#aaa"}}>Regenerate</button>
+                <button onClick={clearPlan} style={{...S.smallBtn,background:"transparent",color:"#f87171",border:"1px solid #f87171"}}>Clear</button>
+              </div>
+              <p style={{color:"#666",fontSize:"0.78rem",marginTop:"0.75rem"}}>Tap "Change" on any day to override the meal. Shopping list updates automatically.</p>
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ── Shopping Tab ──────────────────────────────────────────────────────────
+function ShoppingTab({ shopping, saveShopping, favourites, saveFavourites, itemPrefs, learnItemPref, classifyItem, pantry, savePantry, categories, showToast }) {
+  const [newItem, setNewItem]       = useState("");
+  const [section, setSection]       = useState("all");
+  const [showFavs, setShowFavs]     = useState(false);
+  const [showPantry, setShowPantry] = useState(false);
+  const [newFav, setNewFav]         = useState("");
+  const [favCategory, setFavCategory] = useState(categories[0]||"Other");
+  const [newPantry, setNewPantry]   = useState("");
+
+  const addItem = async (text) => {
+    const t=(text||newItem).trim(); if(!t) return;
+    const sec=classifyItem(t);
+    await saveShopping([...shopping,{id:Date.now().toString()+Math.random(),text:t,section:sec,checked:false}]);
+    if(!text) setNewItem("");
+  };
+  const toggle = async id => { await saveShopping(shopping.map(i=>i.id===id?{...i,checked:!i.checked}:i)); };
+  const removeItem = async id => { await saveShopping(shopping.filter(i=>i.id!==id)); };
+  const removeChecked = async () => { await saveShopping(shopping.filter(i=>!i.checked)); showToast("Checked items removed."); };
+  const moveItem = async (id, newSec) => {
+    const item=shopping.find(i=>i.id===id); if(!item) return;
+    await saveShopping(shopping.map(i=>i.id===id?{...i,section:newSec}:i));
+    await learnItemPref(item.text, newSec);
+    showToast(`Moved to ${newSec==="online"?"🌐 Online":"🏪 In Store"}`);
+  };
+
+  // Pantry
+  const addPantryItem = async () => {
+    const t=newPantry.trim(); if(!t) return;
+    await savePantry([...pantry,{id:Date.now().toString(),text:t}]);
+    // Remove matching items from shopping list
+    const updated = shopping.filter(i=>!i.text.toLowerCase().includes(t.toLowerCase())&&!t.toLowerCase().includes(i.text.toLowerCase()));
+    if (updated.length<shopping.length) { await saveShopping(updated); showToast(`"${t}" added to pantry & removed from list`); }
+    else showToast(`"${t}" added to pantry ✓`);
+    setNewPantry("");
+  };
+  const removePantryItem = async id => { await savePantry(pantry.filter(p=>p.id!==id)); showToast("Removed from pantry","#f87171"); };
+  const markHaveIt = async (itemId) => {
+    // Move item to pantry and remove from shopping list
+    const item = shopping.find(i=>i.id===itemId); if(!item) return;
+    await savePantry([...pantry,{id:Date.now().toString(),text:item.text}]);
+    await saveShopping(shopping.filter(i=>i.id!==itemId));
+    showToast(`"${item.text}" moved to pantry`);
+  };
+
+  const addFav = async () => {
+    if(!newFav.trim()) return;
+    await saveFavourites([...favourites,{id:Date.now().toString(),text:newFav.trim(),category:favCategory}]);
+    setNewFav(""); showToast("Favourite saved ✓");
+  };
+  const removeFav = async id => { await saveFavourites(favourites.filter(f=>f.id!==id)); };
+  const addFavToList = async fav => {
+    if(shopping.some(i=>i.text.toLowerCase()===fav.text.toLowerCase()&&!i.checked)){ showToast("Already on the list!","#fbbf24"); return; }
+    await addItem(fav.text);
+  };
+
+  const sections = [
+    {key:"all",label:"All",icon:"📋"},
+    {key:"online",label:"Online",icon:"🌐"},
+    {key:"store",label:"In Store",icon:"🏪"},
+    {key:"unsorted",label:"Unsorted",icon:"❓"},
+  ];
+  const filtered  = section==="all" ? shopping : shopping.filter(i=>i.section===section);
+  const unchecked = filtered.filter(i=>!i.checked);
+  const checked   = filtered.filter(i=>i.checked);
+  const totalDone = shopping.filter(i=>i.checked).length;
+  const groupedFavs = categories.reduce((acc,cat)=>{ const items=favourites.filter(f=>f.category===cat); if(items.length) acc[cat]=items; return acc; },{});
+
+  return (
+    <div>
+      {/* Add */}
+      <div style={{display:"flex",gap:"0.5rem",marginBottom:"1rem"}}>
+        <input value={newItem} onChange={e=>setNewItem(e.target.value)} onKeyDown={e=>e.key==="Enter"&&addItem()}
+          placeholder="Add an item…" style={{...S.input,flex:1,marginBottom:0}}/>
+        <button onClick={()=>addItem()} style={S.primaryBtn}>Add</button>
+      </div>
+
+      {/* Section tabs */}
+      <div style={{display:"flex",gap:"0.35rem",marginBottom:"1rem",flexWrap:"wrap"}}>
+        {sections.map(sec=>{
+          const count=sec.key==="all"?shopping.filter(i=>!i.checked).length:shopping.filter(i=>i.section===sec.key&&!i.checked).length;
+          return (
+            <button key={sec.key} onClick={()=>setSection(sec.key)}
+              style={{...S.modeBtn,...(section===sec.key?S.modeBtnActive:{}),padding:"0.4rem 0.8rem",fontSize:"0.82rem",display:"flex",alignItems:"center",gap:"0.35rem"}}>
+              {sec.icon} {sec.label}
+              {count>0&&<span style={{background:section===sec.key?"rgba(0,0,0,0.2)":"#333",borderRadius:"999px",padding:"0 6px",fontSize:"0.72rem",color:section===sec.key?"#1a1a2e":"#aaa"}}>{count}</span>}
+            </button>
+          );
+        })}
+      </div>
+
+      {/* Favourites */}
+      <button onClick={()=>setShowFavs(p=>!p)} style={{...S.modeBtn,...(showFavs?S.modeBtnActive:{}),marginBottom:"0.5rem",width:"100%"}}>
+        ⭐ {showFavs?"Hide Favourites":"Quick-add from Favourites"}
+      </button>
+      {showFavs&&(
+        <div style={{...S.card,marginBottom:"1rem"}}>
+          <h3 style={{...S.sectionHead,marginTop:0}}>Favourites</h3>
+          <div style={{display:"flex",gap:"0.5rem",marginBottom:"1rem",flexWrap:"wrap"}}>
+            <input value={newFav} onChange={e=>setNewFav(e.target.value)} onKeyDown={e=>e.key==="Enter"&&addFav()}
+              placeholder="New favourite…" style={{...S.input,flex:1,marginBottom:0,minWidth:"120px"}}/>
+            <select value={favCategory} onChange={e=>setFavCategory(e.target.value)} style={{...S.input,width:"120px",marginBottom:0,fontSize:"0.82rem"}}>
+              {categories.map(c=><option key={c}>{c}</option>)}
+            </select>
+            <button onClick={addFav} style={S.smallBtn}>Save</button>
+          </div>
+          {favourites.length===0?<p style={{color:"#666",fontSize:"0.9rem"}}>No favourites yet.</p>:(
+            Object.entries(groupedFavs).map(([cat,items])=>(
+              <div key={cat} style={{marginBottom:"0.75rem"}}>
+                <div style={{fontSize:"0.72rem",color:"#666",letterSpacing:"0.1em",textTransform:"uppercase",marginBottom:"0.35rem"}}>{cat}</div>
+                <div style={{display:"flex",flexWrap:"wrap",gap:"0.4rem"}}>
+                  {items.map(fav=>(
+                    <div key={fav.id} style={{display:"flex",alignItems:"center",background:"#222",borderRadius:"999px",overflow:"hidden",border:"1px solid #333"}}>
+                      <button onClick={()=>addFavToList(fav)} style={{padding:"0.3rem 0.75rem",background:"transparent",border:"none",color:"#f5f0e8",cursor:"pointer",fontFamily:"inherit",fontSize:"0.85rem"}}>+ {fav.text}</button>
+                      <button onClick={()=>removeFav(fav.id)} style={{padding:"0.3rem 0.5rem",background:"transparent",border:"none",borderLeft:"1px solid #333",color:"#555",cursor:"pointer",fontSize:"0.8rem"}}>×</button>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            ))
+          )}
+        </div>
+      )}
+
+      {/* Pantry / We have it */}
+      <button onClick={()=>setShowPantry(p=>!p)} style={{...S.modeBtn,...(showPantry?S.modeBtnActive:{}),marginBottom:"1rem",width:"100%"}}>
+        🏠 {showPantry?"Hide Pantry":"We Already Have…"}
+      </button>
+      {showPantry&&(
+        <div style={{...S.card,marginBottom:"1rem"}}>
+          <h3 style={{...S.sectionHead,marginTop:0}}>Pantry — items we have at home</h3>
+          <p style={{color:"#888",fontSize:"0.82rem",margin:"0 0 0.75rem"}}>Items here are automatically excluded from future shopping lists.</p>
+          <div style={{display:"flex",gap:"0.5rem",marginBottom:"1rem"}}>
+            <input value={newPantry} onChange={e=>setNewPantry(e.target.value)} onKeyDown={e=>e.key==="Enter"&&addPantryItem()}
+              placeholder="e.g. olive oil, salt…" style={{...S.input,flex:1,marginBottom:0}}/>
+            <button onClick={addPantryItem} style={S.smallBtn}>Add</button>
+          </div>
+          {pantry.length===0?<p style={{color:"#666",fontSize:"0.85rem"}}>Nothing saved yet.</p>:(
+            <div style={{display:"flex",flexWrap:"wrap",gap:"0.4rem"}}>
+              {pantry.map(p=>(
+                <div key={p.id} style={{display:"flex",alignItems:"center",background:"#222",borderRadius:"999px",overflow:"hidden",border:"1px solid #333"}}>
+                  <span style={{padding:"0.3rem 0.75rem",fontSize:"0.85rem",color:"#ccc"}}>🏠 {p.text}</span>
+                  <button onClick={()=>removePantryItem(p.id)} style={{padding:"0.3rem 0.5rem",background:"transparent",border:"none",borderLeft:"1px solid #333",color:"#555",cursor:"pointer",fontSize:"0.8rem"}}>×</button>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* Progress bar */}
+      {shopping.length>0&&(
+        <div style={{marginBottom:"1rem"}}>
+          <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:"0.5rem"}}>
+            <span style={{color:"#a89f8c",fontSize:"0.82rem"}}>{totalDone}/{shopping.length} done</span>
+            {shopping.some(i=>i.checked)&&<button onClick={removeChecked} style={{...S.smallBtn,background:"#f87171",color:"#fff"}}>Remove checked</button>}
+          </div>
+          <div style={{background:"#2a2a2a",borderRadius:"999px",height:"5px"}}>
+            <div style={{height:"100%",width:`${(totalDone/shopping.length)*100}%`,background:"#4ade80",borderRadius:"999px",transition:"width 0.3s"}}/>
+          </div>
+        </div>
+      )}
+
+      {/* List */}
+      {filtered.length===0&&shopping.length===0?(
+        <div style={S.emptyState}><p>Shopping list is empty.</p></div>
+      ):filtered.length===0?(
+        <div style={{...S.emptyState,padding:"1.5rem"}}><p style={{color:"#666",margin:0}}>No {section} items remaining.</p></div>
+      ):(
+        <div style={{display:"flex",flexDirection:"column",gap:"0.4rem"}}>
+          {unchecked.map(item=><ShoppingItemRow key={item.id} item={item} onToggle={toggle} onMove={moveItem} onRemove={removeItem} onMarkHaveIt={markHaveIt}/>)}
+          {checked.length>0&&<>
+            <div style={{color:"#555",fontSize:"0.75rem",letterSpacing:"0.1em",textTransform:"uppercase",margin:"0.75rem 0 0.25rem"}}>Done</div>
+            {checked.map(item=><ShoppingItemRow key={item.id} item={item} onToggle={toggle} onMove={moveItem} onRemove={removeItem} onMarkHaveIt={null}/>)}
+          </>}
+        </div>
+      )}
+      {shopping.length>0&&(
+        <div style={{marginTop:"1.5rem",display:"flex",gap:"1rem",flexWrap:"wrap"}}>
+          {[["🌐","Online","online"],["🏪","In Store","store"],["❓","Unsorted","unsorted"]].map(([icon,lbl,k])=>(
+            <div key={k} style={{fontSize:"0.78rem",color:"#666",display:"flex",alignItems:"center",gap:"0.3rem"}}>
+              {icon} {lbl}: {shopping.filter(i=>i.section===k&&!i.checked).length}
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function ShoppingItemRow({ item, onToggle, onMove, onRemove, onMarkHaveIt }) {
+  const [expanded, setExpanded] = useState(false);
+  const sectionIcon = item.section==="online"?"🌐":item.section==="store"?"🏪":"❓";
+  return (
+    <div style={{...S.shoppingItem,opacity:item.checked?0.5:1}}>
+      <div style={{display:"flex",alignItems:"center",gap:"0.75rem",padding:"0.65rem 0.9rem"}}>
+        <div onClick={()=>onToggle(item.id)} style={{...S.checkbox,...(item.checked?S.checkboxChecked:{}),cursor:"pointer",flexShrink:0}}>
+          {item.checked&&<span style={{color:"#1a1a2e",fontSize:"11px",fontWeight:"bold"}}>✓</span>}
+        </div>
+        <span onClick={()=>onToggle(item.id)} style={{flex:1,textDecoration:item.checked?"line-through":"none",color:"#f5f0e8",cursor:"pointer",fontSize:"0.92rem"}}>{item.text}</span>
+        {!item.checked&&(
+          <button onClick={()=>setExpanded(p=>!p)}
+            style={{background:"transparent",border:"1px solid #2a2a2a",borderRadius:"6px",padding:"0.2rem 0.4rem",cursor:"pointer",fontSize:"0.8rem",color:"#666",flexShrink:0}}>
+            {sectionIcon}
+          </button>
+        )}
+      </div>
+      {expanded&&!item.checked&&(
+        <div style={{borderTop:"1px solid #1e1e1e",padding:"0.5rem 0.9rem",background:"#141414",display:"flex",gap:"0.4rem",flexWrap:"wrap",alignItems:"center"}}>
+          <span style={{fontSize:"0.72rem",color:"#555",marginRight:"0.2rem"}}>Move:</span>
+          {[["online","🌐 Online"],["store","🏪 Store"],["unsorted","❓"]].map(([sec,lbl])=>(
+            <button key={sec} onClick={async()=>{ await onMove(item.id,sec); setExpanded(false); }}
+              style={{padding:"0.22rem 0.6rem",borderRadius:"6px",fontSize:"0.75rem",cursor:"pointer",fontFamily:"inherit",border:"1px solid",borderColor:item.section===sec?"#c9a84c":"#2a2a2a",background:item.section===sec?"#2d2000":"transparent",color:item.section===sec?"#c9a84c":"#888"}}>
+              {lbl}
+            </button>
+          ))}
+          <div style={{flex:1}}/>
+          {onMarkHaveIt&&(
+            <button onClick={()=>{ onMarkHaveIt(item.id); setExpanded(false); }}
+              style={{padding:"0.22rem 0.6rem",borderRadius:"6px",fontSize:"0.75rem",cursor:"pointer",fontFamily:"inherit",border:"1px solid #4ade80",background:"#052e16",color:"#4ade80"}}>
+              🏠 Have it
+            </button>
+          )}
+          <button onClick={()=>{ onRemove(item.id); setExpanded(false); }}
+            style={{padding:"0.22rem 0.6rem",borderRadius:"6px",fontSize:"0.75rem",cursor:"pointer",fontFamily:"inherit",border:"1px solid #f87171",background:"transparent",color:"#f87171"}}>
+            Remove
+          </button>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ── Freezer Tab ───────────────────────────────────────────────────────────
+function FreezerTab({ freezer, saveFreezer, showToast }) {
+  const [adding,setAdding]=useState(false);const [name,setName]=useState("");const [qty,setQty]=useState("1");const [unit,setUnit]=useState("portions");const [notes,setNotes]=useState("");const [editId,setEditId]=useState(null);
+  const reset=()=>{setName("");setQty("1");setUnit("portions");setNotes("");setAdding(false);setEditId(null);};
+  const submit=async()=>{if(!name.trim())return;if(editId){await saveFreezer(freezer.map(i=>i.id===editId?{...i,name:name.trim(),qty:parseInt(qty)||1,unit,notes}:i));showToast("Updated ✓");}else{await saveFreezer([...freezer,{id:Date.now().toString(),name:name.trim(),qty:parseInt(qty)||1,unit,notes,addedAt:new Date().toISOString()}]);showToast("Added ✓");}reset();};
+  const adjustQty=async(id,delta)=>{const u=freezer.map(i=>i.id!==id?i:{...i,qty:Math.max(0,i.qty+delta)}).filter(i=>i.qty>0);await saveFreezer(u);};
+  const startEdit=i=>{setEditId(i.id);setName(i.name);setQty(String(i.qty));setUnit(i.unit);setNotes(i.notes||"");setAdding(true);};
+  return (
+    <div>
+      <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:"1.25rem"}}>
+        <p style={{color:"#a89f8c",margin:0,fontSize:"0.9rem"}}>{freezer.length} item{freezer.length!==1?"s":""} in freezer</p>
+        {!adding&&<button onClick={()=>setAdding(true)} style={S.primaryBtn}>+ Add Meal</button>}
+      </div>
+      {adding&&(
+        <div style={{...S.card,marginBottom:"1.25rem"}}>
+          <h3 style={{...S.sectionHead,marginTop:0}}>{editId?"Edit":"Add Freezer Meal"}</h3>
+          <input value={name} onChange={e=>setName(e.target.value)} placeholder="Meal name" style={S.input}/>
+          <div style={{display:"flex",gap:"0.5rem",marginBottom:"0.75rem"}}>
+            <input value={qty} onChange={e=>setQty(e.target.value)} type="number" min="1" style={{...S.input,width:"80px",marginBottom:0}}/>
+            <select value={unit} onChange={e=>setUnit(e.target.value)} style={{...S.input,flex:1,marginBottom:0}}>{["portions","bags","containers","servings"].map(u=><option key={u}>{u}</option>)}</select>
+          </div>
+          <input value={notes} onChange={e=>setNotes(e.target.value)} placeholder="Notes" style={S.input}/>
+          <div style={{display:"flex",gap:"0.5rem"}}>
+            <button onClick={submit} style={S.primaryBtn}>{editId?"Save":"Add"}</button>
+            <button onClick={reset} style={{...S.smallBtn,background:"#333",color:"#aaa"}}>Cancel</button>
+          </div>
+        </div>
+      )}
+      {freezer.length===0&&!adding?(<div style={S.emptyState}><span style={{fontSize:"2rem"}}>🧊</span><p>Freezer is empty.</p></div>):(
+        <div style={{display:"flex",flexDirection:"column",gap:"0.65rem"}}>
+          {freezer.map(item=>(
+            <div key={item.id} style={S.card}>
+              <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",gap:"0.75rem"}}>
+                <div style={{flex:1}}><div style={{fontWeight:"500",color:"#f5f0e8"}}>{item.name}</div>{item.notes&&<div style={{fontSize:"0.8rem",color:"#888",marginTop:"0.2rem"}}>{item.notes}</div>}</div>
+                <div style={{display:"flex",alignItems:"center",gap:"0.4rem",flexShrink:0}}>
+                  <button onClick={()=>adjustQty(item.id,-1)} style={S.qtyBtn}>−</button>
+                  <span style={{color:"#c9a84c",fontWeight:"600",minWidth:"70px",textAlign:"center",fontSize:"0.88rem"}}>{item.qty} {item.unit}</span>
+                  <button onClick={()=>adjustQty(item.id,1)} style={S.qtyBtn}>+</button>
+                </div>
+              </div>
+              <div style={{display:"flex",gap:"0.5rem",marginTop:"0.75rem"}}>
+                <button onClick={()=>startEdit(item)} style={S.editTimeBtn}>Edit</button>
+                <button onClick={async()=>{await saveFreezer(freezer.filter(i=>i.id!==item.id));showToast("Removed","#f87171");}} style={{...S.editTimeBtn,color:"#f87171",borderColor:"#f87171"}}>Remove</button>
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ── Family Tab ────────────────────────────────────────────────────────────
+function FamilyTab({ family, saveFamily, showToast }) {
+  const [editing,setEditing]=useState(null);const [nameVal,setNameVal]=useState("");const [emojiVal,setEmojiVal]=useState("");
+  const startEdit=m=>{setEditing(m.id);setNameVal(m.name);setEmojiVal(m.emoji);};
+  const saveEdit=async()=>{await saveFamily(family.map(m=>m.id===editing?{...m,name:nameVal.trim()||m.name,emoji:emojiVal.trim()||m.emoji}:m));setEditing(null);showToast("Saved ✓");};
+  return (
+    <div>
+      <p style={{color:"#a89f8c",marginBottom:"1.25rem",fontSize:"0.9rem"}}>Edit names and emoji for each family member.</p>
+      <div style={{display:"flex",flexDirection:"column",gap:"0.65rem"}}>
+        {family.map(m=>(
+          <div key={m.id} style={S.card}>
+            {editing===m.id?(
+              <div style={{display:"flex",flexDirection:"column",gap:"0.6rem"}}>
+                <div style={{display:"flex",gap:"0.5rem"}}>
+                  <input value={emojiVal} onChange={e=>setEmojiVal(e.target.value)} style={{...S.input,width:"60px",marginBottom:0,textAlign:"center",fontSize:"1.3rem"}}/>
+                  <input value={nameVal} onChange={e=>setNameVal(e.target.value)} style={{...S.input,flex:1,marginBottom:0}}/>
+                </div>
+                <div style={{display:"flex",gap:"0.5rem"}}><button onClick={saveEdit} style={S.primaryBtn}>Save</button><button onClick={()=>setEditing(null)} style={{...S.smallBtn,background:"#333",color:"#aaa"}}>Cancel</button></div>
+              </div>
+            ):(
+              <div style={{display:"flex",alignItems:"center",justifyContent:"space-between"}}>
+                <div style={{display:"flex",alignItems:"center",gap:"0.75rem"}}><span style={{fontSize:"1.8rem"}}>{m.emoji}</span><div><div style={{fontWeight:"500",color:"#f5f0e8"}}>{m.name}</div><div style={{fontSize:"0.78rem",color:"#666",textTransform:"capitalize"}}>{m.type}</div></div></div>
+                <button onClick={()=>startEdit(m)} style={S.editTimeBtn}>Edit</button>
+              </div>
+            )}
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+// ── Recipes Tab ───────────────────────────────────────────────────────────
+function RecipesTab({ recipes, saveRecipes, family, showToast }) {
+  const [view, setView]         = useState("list");
+  const [selected, setSelected] = useState(null);
+  const [addMode, setAddMode]   = useState("manual");
+  const [inputUrl, setInputUrl] = useState("");
+  const [inputText, setInputText] = useState("");
+  const [processing, setProcessing] = useState(false);
+  const [apiError, setApiError] = useState("");
+  // Manual entry fields
+  const [manualName, setManualName]   = useState("");
+  const [manualTime, setManualTime]   = useState("30");
+  const [manualCarb, setManualCarb]   = useState("none");
+  const [manualIngs, setManualIngs]   = useState("");
+  const [manualSteps, setManualSteps] = useState("");
+  const fileRef = useRef();
+
+  // Inline edit state for the detail view
+  const [editingName, setEditingName]   = useState(false);
+  const [nameVal, setNameVal]           = useState("");
+  const [editingTime, setEditingTime]   = useState(false);
+  const [timeVal, setTimeVal]           = useState("");
+  const [editingIngIdx, setEditingIngIdx] = useState(null); // index being edited
+  const [ingVal, setIngVal]             = useState("");
+  const [addingIng, setAddingIng]       = useState(false);
+  const [newIngVal, setNewIngVal]       = useState("");
+
+  const CARB_LABELS = { none:"No main carb", pasta:"🍝 Pasta", rice:"🍚 Rice", bread:"🍞 Bread", potato:"🥔 Potato", other:"Other" };
+
+  const processRecipe = async (source, imageBase64=null, mediaType=null) => {
+    setProcessing(true); setApiError("");
+    try {
+      const system = `You are a recipe parser. Return ONLY valid JSON, no markdown:\n{"name":"string","cookTime":number,"ingredients":["string"],"steps":["string"],"notes":"string","mainCarb":"none|pasta|rice|bread|potato|other"}\ncookTime is total minutes.`;
+      const raw = await callClaude(system, imageBase64 ? "Extract the recipe from this image." : `Extract recipe:\n\n${source}`, imageBase64, mediaType);
+      let parsed;
+      try { parsed = JSON.parse(raw.replace(/```json|```/g,"").trim()); }
+      catch(e) { throw new Error("API returned invalid JSON. The API may not be available in preview mode."); }
+      const suitability = {}; family.forEach(m => { suitability[m.id] = "yes"; });
+      const recipe = { id:Date.now().toString(), name:parsed.name||"Unnamed Recipe", cookTime:parsed.cookTime||30, ingredients:parsed.ingredients||[], steps:parsed.steps||[], notes:parsed.notes||"", mainCarb:parsed.mainCarb||"none", suitability, addedAt:new Date().toISOString() };
+      await saveRecipes([...recipes, recipe]);
+      showToast(`✓ "${recipe.name}" added!`);
+      setView("list"); setInputUrl(""); setInputText("");
+    } catch(e) {
+      setApiError(e.message||"Unknown error");
+      showToast("Couldn't parse — try Manual Entry instead.", "#f87171");
+    }
+    setProcessing(false);
+  };
+
+  const saveManualRecipe = async () => {
+    if (!manualName.trim()) { showToast("Please enter a recipe name.", "#f87171"); return; }
+    const suitability = {}; family.forEach(m => { suitability[m.id] = "yes"; });
+    const ings  = manualIngs.split("\n").map(s=>s.trim()).filter(Boolean);
+    const steps = manualSteps.split("\n").map(s=>s.trim()).filter(Boolean);
+    const recipe = { id:Date.now().toString(), name:manualName.trim(), cookTime:parseInt(manualTime)||30, ingredients:ings, steps, notes:"", mainCarb:manualCarb, suitability, addedAt:new Date().toISOString() };
+    await saveRecipes([...recipes, recipe]);
+    showToast(`✓ "${recipe.name}" added!`);
+    setView("list"); setManualName(""); setManualTime("30"); setManualCarb("none"); setManualIngs(""); setManualSteps("");
+  };
+
+  const updateRecipe = async (id, changes) => {
+    const updated = recipes.map(r => r.id===id ? {...r, ...changes} : r);
+    await saveRecipes(updated);
+    setSelected(updated.find(r => r.id===id) || null);
+  };
+
+  const setSuit = async (rid, mid, val) => {
+    const u = recipes.map(r => r.id===rid ? {...r, suitability:{...r.suitability,[mid]:val}} : r);
+    await saveRecipes(u); setSelected(u.find(r=>r.id===rid)||null);
+  };
+  const delRecipe = async id => { await saveRecipes(recipes.filter(r=>r.id!==id)); setView("list"); showToast("Removed","#f87171"); };
+  const suitWarn  = r => { if(!r.suitability) return null; const nos=family.filter(m=>r.suitability[m.id]==="no"); return nos.length?nos.map(m=>m.emoji).join("")+" won't eat":null; };
+
+  // Ingredient helpers
+  const saveIngredient = async (r, idx, val) => {
+    const v = val.trim();
+    if (!v) return;
+    const ings = [...r.ingredients];
+    ings[idx] = v;
+    await updateRecipe(r.id, { ingredients: ings });
+    setEditingIngIdx(null);
+    showToast("Ingredient updated ✓");
+  };
+  const deleteIngredient = async (r, idx) => {
+    const ings = r.ingredients.filter((_,i)=>i!==idx);
+    await updateRecipe(r.id, { ingredients: ings });
+    showToast("Ingredient removed","#f87171");
+  };
+  const addIngredient = async (r) => {
+    const v = newIngVal.trim(); if (!v) return;
+    await updateRecipe(r.id, { ingredients: [...r.ingredients, v] });
+    setNewIngVal(""); setAddingIng(false);
+    showToast("Ingredient added ✓");
+  };
+
+  if (view==="detail" && selected) {
+    const r = recipes.find(x=>x.id===selected.id) || selected;
+    return (
+      <div>
+        <button onClick={()=>{ setView("list"); setEditingName(false); setEditingTime(false); setEditingIngIdx(null); setAddingIng(false); }} style={S.backBtn}>← Back</button>
+        <div style={S.card}>
+
+          {/* ── Editable name ── */}
+          <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",gap:"0.5rem",marginBottom:"0.75rem",flexWrap:"wrap"}}>
+            {editingName ? (
+              <div style={{flex:1,display:"flex",gap:"0.5rem",alignItems:"center",flexWrap:"wrap"}}>
+                <input value={nameVal} onChange={e=>setNameVal(e.target.value)} onKeyDown={e=>{ if(e.key==="Enter"){ updateRecipe(r.id,{name:nameVal.trim()||r.name}); setEditingName(false); showToast("Name updated ✓"); }}} style={{...S.input,flex:1,marginBottom:0,fontSize:"1.1rem"}} autoFocus/>
+                <button onClick={()=>{ updateRecipe(r.id,{name:nameVal.trim()||r.name}); setEditingName(false); showToast("Name updated ✓"); }} style={S.smallBtn}>Save</button>
+                <button onClick={()=>setEditingName(false)} style={{...S.smallBtn,background:"#333",color:"#aaa"}}>Cancel</button>
+              </div>
+            ) : (
+              <div style={{display:"flex",alignItems:"center",gap:"0.6rem",flex:1,flexWrap:"wrap"}}>
+                <h2 style={{...S.recipeTitle,margin:0}}>{r.name}</h2>
+                <button onClick={()=>{ setNameVal(r.name); setEditingName(true); }} style={S.editTimeBtn}>✏️ Rename</button>
+              </div>
+            )}
+            <button onClick={()=>delRecipe(r.id)} style={S.deleteBtn}>Delete</button>
+          </div>
+
+          {/* ── Cook time ── */}
+          <div style={{display:"flex",alignItems:"center",gap:"0.75rem",marginBottom:"0.75rem",flexWrap:"wrap"}}>
+            {editingTime ? (
+              <div style={{display:"flex",gap:"0.4rem",alignItems:"center"}}>
+                <input value={timeVal} onChange={e=>setTimeVal(e.target.value)} type="number" placeholder="mins" style={{...S.input,width:"75px",padding:"0.3rem 0.5rem",marginBottom:0}}/>
+                <button onClick={()=>{ const m=parseInt(timeVal); if(m>0){ updateRecipe(r.id,{cookTime:m}); showToast("Time updated ✓"); } setEditingTime(false); }} style={S.smallBtn}>Save</button>
+                <button onClick={()=>setEditingTime(false)} style={{...S.smallBtn,background:"#444",color:"#ccc"}}>Cancel</button>
+              </div>
+            ) : (
+              <>
+                <span style={S.timeChip}>⏱ {timeLabel(r.cookTime)}</span>
+                {r.mainCarb&&r.mainCarb!=="none"&&<span style={{...S.timeChip,color:"#a89f8c"}}>{CARB_LABELS[r.mainCarb]}</span>}
+                <button onClick={()=>{ setTimeVal(r.cookTime); setEditingTime(true); }} style={S.editTimeBtn}>Edit time</button>
+              </>
+            )}
+          </div>
+
+          {/* ── Main carb ── */}
+          <div style={{marginBottom:"1rem"}}>
+            <label style={{color:"#a89f8c",fontSize:"0.78rem",letterSpacing:"0.08em",textTransform:"uppercase",display:"block",marginBottom:"0.4rem"}}>Main carb</label>
+            <div style={{display:"flex",gap:"0.35rem",flexWrap:"wrap"}}>
+              {Object.entries(CARB_LABELS).map(([k,l])=>(
+                <button key={k} onClick={()=>updateRecipe(r.id,{mainCarb:k})}
+                  style={{padding:"0.25rem 0.6rem",borderRadius:"6px",fontSize:"0.78rem",cursor:"pointer",fontFamily:"inherit",border:"1px solid",borderColor:(r.mainCarb||"none")===k?"#c9a84c":"#333",background:(r.mainCarb||"none")===k?"#2d2000":"transparent",color:(r.mainCarb||"none")===k?"#c9a84c":"#555"}}>
+                  {l}
+                </button>
+              ))}
+            </div>
+          </div>
+
+          {/* ── Who's eating ── */}
+          <h3 style={S.sectionHead}>Who's eating this?</h3>
+          <div style={{display:"flex",flexDirection:"column",gap:"0.6rem",marginBottom:"1rem"}}>
+            {family.map(m => {
+              const val = r.suitability?.[m.id]||"yes";
+              return (
+                <div key={m.id} style={{display:"flex",alignItems:"center",gap:"0.75rem",flexWrap:"wrap"}}>
+                  <span style={{minWidth:"110px",display:"flex",alignItems:"center",gap:"0.4rem"}}>
+                    <span style={{fontSize:"1.1rem"}}>{m.emoji}</span>
+                    <span style={{color:"#f5f0e8",fontSize:"0.9rem"}}>{m.name}</span>
+                  </span>
+                  <div style={{display:"flex",gap:"0.35rem"}}>
+                    {SUITABILITY.map(s=>(
+                      <button key={s.key} onClick={()=>setSuit(r.id,m.id,s.key)}
+                        style={{padding:"0.28rem 0.65rem",borderRadius:"6px",fontSize:"0.78rem",cursor:"pointer",fontFamily:"inherit",border:"1px solid",borderColor:val===s.key?s.color:"#333",background:val===s.key?s.bg:"transparent",color:val===s.key?s.color:"#555",fontWeight:val===s.key?"600":"400"}}>
+                        {s.label}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+
+          {/* ── Editable ingredients ── */}
+          {r.ingredients?.length > 0 && (
+            <>
+              <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:"0.5rem"}}>
+                <h3 style={{...S.sectionHead,margin:0}}>Ingredients</h3>
+                <button onClick={()=>setAddingIng(p=>!p)} style={{...S.editTimeBtn,color:"#4ade80",borderColor:"#4ade80",fontSize:"0.78rem"}}>+ Add</button>
+              </div>
+
+              {addingIng && (
+                <div style={{display:"flex",gap:"0.5rem",marginBottom:"0.65rem",flexWrap:"wrap"}}>
+                  <input value={newIngVal} onChange={e=>setNewIngVal(e.target.value)} onKeyDown={e=>e.key==="Enter"&&addIngredient(r)}
+                    placeholder="e.g. 200g pork mince" autoFocus
+                    style={{...S.input,flex:1,marginBottom:0,fontSize:"0.9rem",padding:"0.4rem 0.65rem"}}/>
+                  <button onClick={()=>addIngredient(r)} style={S.smallBtn}>Add</button>
+                  <button onClick={()=>{setAddingIng(false);setNewIngVal("");}} style={{...S.smallBtn,background:"#333",color:"#aaa"}}>Cancel</button>
+                </div>
+              )}
+
+              <div style={{display:"flex",flexDirection:"column",gap:"0.3rem",marginBottom:"1rem"}}>
+                {r.ingredients.map((ing, idx) => (
+                  <div key={idx}>
+                    {editingIngIdx===idx ? (
+                      <div style={{display:"flex",gap:"0.4rem",alignItems:"center",flexWrap:"wrap"}}>
+                        <input value={ingVal} onChange={e=>setIngVal(e.target.value)}
+                          onKeyDown={e=>{ if(e.key==="Enter") saveIngredient(r,idx,ingVal); if(e.key==="Escape") setEditingIngIdx(null); }}
+                          autoFocus style={{...S.input,flex:1,marginBottom:0,fontSize:"0.9rem",padding:"0.4rem 0.65rem"}}/>
+                        <button onClick={()=>saveIngredient(r,idx,ingVal)} style={S.smallBtn}>Save</button>
+                        <button onClick={()=>setEditingIngIdx(null)} style={{...S.smallBtn,background:"#333",color:"#aaa"}}>✕</button>
+                      </div>
+                    ) : (
+                      <div style={{display:"flex",alignItems:"center",gap:"0.5rem",padding:"0.35rem 0",borderBottom:"1px solid #1e1e1e",group:true}}>
+                        <span style={{flex:1,color:"#ccc",fontSize:"0.92rem"}}>• {ing}</span>
+                        <button onClick={()=>{ setEditingIngIdx(idx); setIngVal(ing); }}
+                          style={{background:"transparent",border:"none",color:"#555",cursor:"pointer",fontSize:"0.8rem",padding:"0.1rem 0.3rem",flexShrink:0}}>✏️</button>
+                        <button onClick={()=>deleteIngredient(r,idx)}
+                          style={{background:"transparent",border:"none",color:"#f87171",cursor:"pointer",fontSize:"0.85rem",padding:"0.1rem 0.3rem",flexShrink:0}}>✕</button>
+                      </div>
+                    )}
+                  </div>
+                ))}
+              </div>
+            </>
+          )}
+
+          {/* Steps (read-only) */}
+          {r.steps?.length > 0 && (
+            <>
+              <h3 style={S.sectionHead}>Method</h3>
+              <ol style={S.list}>{r.steps.map((s,n)=><li key={n} style={{marginBottom:"0.5rem"}}>{s}</li>)}</ol>
+            </>
+          )}
+          {r.notes && (
+            <>
+              <h3 style={S.sectionHead}>Notes</h3>
+              <p style={{color:"#ccc",lineHeight:1.6}}>{r.notes}</p>
+            </>
+          )}
+        </div>
+      </div>
+    );
+  }
+
+  if (view==="add") return (
+    <div>
+      <button onClick={()=>setView("list")} style={S.backBtn}>← Back</button>
+      <div style={S.card}>
+        <h2 style={{...S.recipeTitle,marginBottom:"1.25rem"}}>Add a Recipe</h2>
+        <div style={{display:"flex",gap:"0.5rem",marginBottom:"1.5rem",flexWrap:"wrap"}}>
+          {[["manual","✏️ Manual"],["url","🔗 URL"],["photo","📷 Photo"],["text","📋 Paste text"]].map(([m,l])=>(
+            <button key={m} onClick={()=>{setAddMode(m);setApiError("");}} style={{...S.modeBtn,...(addMode===m?S.modeBtnActive:{})}}>{l}</button>
+          ))}
+        </div>
+
+        {/* ── Manual entry (no API needed) ── */}
+        {addMode==="manual"&&(
+          <div>
+            <p style={S.hint}>Type the recipe details directly — no internet needed.</p>
+            <label style={{color:"#a89f8c",fontSize:"0.78rem",letterSpacing:"0.08em",textTransform:"uppercase",display:"block",marginBottom:"0.3rem"}}>Recipe name *</label>
+            <input value={manualName} onChange={e=>setManualName(e.target.value)} placeholder="e.g. Chicken & Rigatoni Pasta Bake" style={S.input}/>
+            <div style={{display:"flex",gap:"0.5rem",marginBottom:"0.75rem"}}>
+              <div style={{flex:1}}>
+                <label style={{color:"#a89f8c",fontSize:"0.78rem",letterSpacing:"0.08em",textTransform:"uppercase",display:"block",marginBottom:"0.3rem"}}>Cook time (mins)</label>
+                <input value={manualTime} onChange={e=>setManualTime(e.target.value)} type="number" placeholder="30" style={{...S.input,marginBottom:0}}/>
+              </div>
+              <div style={{flex:1}}>
+                <label style={{color:"#a89f8c",fontSize:"0.78rem",letterSpacing:"0.08em",textTransform:"uppercase",display:"block",marginBottom:"0.3rem"}}>Main carb</label>
+                <select value={manualCarb} onChange={e=>setManualCarb(e.target.value)} style={{...S.input,marginBottom:0}}>
+                  {[["none","None"],["pasta","🍝 Pasta"],["rice","🍚 Rice"],["bread","🍞 Bread"],["potato","🥔 Potato"],["other","Other"]].map(([k,l])=><option key={k} value={k}>{l}</option>)}
+                </select>
+              </div>
+            </div>
+            <label style={{color:"#a89f8c",fontSize:"0.78rem",letterSpacing:"0.08em",textTransform:"uppercase",display:"block",marginBottom:"0.3rem"}}>Ingredients (one per line)</label>
+            <textarea value={manualIngs} onChange={e=>setManualIngs(e.target.value)} placeholder={"280g diced chicken breast\n1 red onion, sliced\n200g rigatoni\n..."} rows={6} style={{...S.input,resize:"vertical"}}/>
+            <label style={{color:"#a89f8c",fontSize:"0.78rem",letterSpacing:"0.08em",textTransform:"uppercase",display:"block",marginBottom:"0.3rem"}}>Steps (one per line, optional)</label>
+            <textarea value={manualSteps} onChange={e=>setManualSteps(e.target.value)} placeholder={"Preheat oven to 200°C...\nCook the chicken for 25 mins...\n..."} rows={5} style={{...S.input,resize:"vertical"}}/>
+            <button onClick={saveManualRecipe} disabled={!manualName.trim()} style={S.primaryBtn}>Save Recipe</button>
+          </div>
+        )}
+
+        {addMode==="url"&&(
+          <div>
+            <p style={S.hint}>Paste a recipe website URL — Claude will read it automatically.</p>
+            <input value={inputUrl} onChange={e=>setInputUrl(e.target.value)} placeholder="https://…" style={S.input}/>
+            {apiError&&<p style={{color:"#f87171",fontSize:"0.82rem",marginBottom:"0.5rem"}}>⚠️ {apiError}</p>}
+            <button onClick={()=>processRecipe(inputUrl)} disabled={processing||!inputUrl.trim()} style={S.primaryBtn}>{processing?"Fetching…":"Import Recipe"}</button>
+            {apiError&&<p style={{color:"#a89f8c",fontSize:"0.8rem",marginTop:"0.5rem"}}>If this keeps failing, use ✏️ Manual entry instead.</p>}
+          </div>
+        )}
+        {addMode==="photo"&&(
+          <div>
+            <p style={S.hint}>Upload a clear, well-lit photo of a recipe card.</p>
+            <input ref={fileRef} type="file" accept="image/*" onChange={e=>{ const f=e.target.files?.[0]; if(!f) return; const rd=new FileReader(); rd.onload=async()=>{ await processRecipe("",rd.result.split(",")[1],f.type); }; rd.readAsDataURL(f); }} style={{display:"none"}}/>
+            {apiError&&<p style={{color:"#f87171",fontSize:"0.82rem",marginBottom:"0.5rem"}}>⚠️ {apiError}</p>}
+            <button onClick={()=>fileRef.current?.click()} disabled={processing} style={S.primaryBtn}>{processing?"Reading…":"Choose Photo"}</button>
+            {apiError&&<p style={{color:"#a89f8c",fontSize:"0.8rem",marginTop:"0.5rem"}}>If this keeps failing, use ✏️ Manual entry instead.</p>}
+          </div>
+        )}
+        {addMode==="text"&&(
+          <div>
+            <p style={S.hint}>Paste the full recipe text and Claude will structure it.</p>
+            <textarea value={inputText} onChange={e=>setInputText(e.target.value)} rows={8} style={{...S.input,resize:"vertical"}}/>
+            {apiError&&<p style={{color:"#f87171",fontSize:"0.82rem",marginBottom:"0.5rem"}}>⚠️ {apiError}</p>}
+            <button onClick={()=>processRecipe(inputText)} disabled={processing||!inputText.trim()} style={S.primaryBtn}>{processing?"Parsing…":"Add Recipe"}</button>
+            {apiError&&<p style={{color:"#a89f8c",fontSize:"0.8rem",marginTop:"0.5rem"}}>If this keeps failing, use ✏️ Manual entry instead.</p>}
+          </div>
+        )}
+        {processing&&<p style={{color:"#a89f8c",marginTop:"1rem",fontSize:"0.9rem"}}>Claude is reading your recipe…</p>}
+      </div>
+    </div>
+  );
+
+  // List view
+  return (
+    <div>
+      <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:"1.25rem"}}>
+        <p style={{color:"#a89f8c",margin:0}}>{recipes.length} recipe{recipes.length!==1?"s":""} saved</p>
+        <button onClick={()=>setView("add")} style={S.primaryBtn}>+ Add Recipe</button>
+      </div>
+      {recipes.length===0 ? (
+        <div style={S.emptyState}><p>No recipes yet.</p></div>
+      ) : (
+        <div style={{display:"flex",flexDirection:"column",gap:"0.65rem"}}>
+          {recipes.map(r => {
+            const warn = suitWarn(r);
+            return (
+              <div key={r.id} onClick={()=>{ setSelected(r); setView("detail"); setEditingName(false); setEditingTime(false); setEditingIngIdx(null); setAddingIng(false); }} style={S.recipeRow}>
+                <div style={{flex:1,minWidth:0}}>
+                  <div style={{fontWeight:"500",color:"#f5f0e8"}}>{r.name}</div>
+                  {warn && <div style={{fontSize:"0.75rem",color:"#f87171",marginTop:"0.15rem"}}>{warn}</div>}
+                </div>
+                <div style={{display:"flex",gap:"0.4rem",alignItems:"center",flexShrink:0}}>
+                  {r.mainCarb&&r.mainCarb!=="none"&&<span>{r.mainCarb==="pasta"?"🍝":r.mainCarb==="rice"?"🍚":r.mainCarb==="bread"?"🍞":r.mainCarb==="potato"?"🥔":"🌾"}</span>}
+                  <span style={S.timeChip}>⏱ {timeLabel(r.cookTime)}</span>
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ── Settings Tab ──────────────────────────────────────────────────────────
+function SettingsTab({ prefs, savePrefs, weekStart, saveWeekStart, itemPrefs, saveItemPrefs, categories, saveCategories, showToast }) {
+  const [local, setLocal]       = useState(prefs);
+  const [ws, setWs]             = useState(weekStart);
+  const [newRule, setNewRule]   = useState("");
+  const [localCats, setLocalCats] = useState(categories);
+  const [newCat, setNewCat]     = useState("");
+  const [editingCat, setEditingCat] = useState(null); // index being renamed
+  const [editCatVal, setEditCatVal] = useState("");
+
+  const toggle = k => setLocal(p=>({...p,[k]:!p[k]}));
+  const save = async () => { await savePrefs(local); await saveWeekStart(ws); await saveCategories(localCats); showToast("Settings saved ✓"); };
+
+  const addRule = () => {
+    const t = newRule.trim(); if (!t) return;
+    const rule = { id: Date.now().toString(), text:t, enabled:true };
+    setLocal(p=>({...p, customRules:[...(p.customRules||[]), rule]}));
+    setNewRule("");
+  };
+  const toggleRule = id => setLocal(p=>({...p, customRules:(p.customRules||[]).map(r=>r.id===id?{...r,enabled:!r.enabled}:r)}));
+  const deleteRule = id => setLocal(p=>({...p, customRules:(p.customRules||[]).filter(r=>r.id!==id)}));
+
+  const learnedCount = Object.keys(itemPrefs).length;
+
+  return (
+    <div>
+      {/* Week start */}
+      <div style={{...S.card,marginBottom:"1rem"}}>
+        <label style={{color:"#a89f8c",fontSize:"0.82rem",letterSpacing:"0.08em",textTransform:"uppercase",display:"block",marginBottom:"0.75rem"}}>📅 Week starts on</label>
+        <div style={{display:"flex",gap:"0.35rem",flexWrap:"wrap"}}>
+          {ALL_DAYS.map(day=>(
+            <button key={day} onClick={()=>setWs(day)}
+              style={{padding:"0.35rem 0.75rem",borderRadius:"7px",fontSize:"0.82rem",cursor:"pointer",fontFamily:"inherit",border:"1px solid",borderColor:ws===day?"#c9a84c":"#333",background:ws===day?"#2d2000":"transparent",color:ws===day?"#c9a84c":"#666",fontWeight:ws===day?"600":"400"}}>
+              {day.slice(0,3)}
+            </button>
+          ))}
+        </div>
+      </div>
+
+      {/* Built-in rules */}
+      <div style={{...S.card,marginBottom:"1rem"}}>
+        <label style={{color:"#a89f8c",fontSize:"0.82rem",letterSpacing:"0.08em",textTransform:"uppercase",display:"block",marginBottom:"0.75rem"}}>🍽 Built-in Rules</label>
+        {[
+          ["avoidConsecutivePasta","Avoid pasta two nights in a row","🍝"],
+          ["avoidConsecutiveRice","Avoid rice two nights in a row","🍚"],
+          ["avoidConsecutivePotato","Avoid potatoes two nights in a row","🥔"],
+          ["matchSchoolMeals","Avoid dinner repeating the child's school lunch","🏫"],
+          ["avoidPreviousWeekMeals","Don't repeat any meal used in the previous week","🔁"],
+          ["limitMeatRepeat","Don't use the same type of meat more than 3 times in a week","🥩"],
+          ["mondayPrawns","Use frozen prawns on a Monday","🦐"],
+          ["prioritiseMissedMeals","If someone isn't eating, prioritise meals they can't eat that night","👤"],
+          ["fridayTakeaway","Plan Friday as Takeaway night","🍕"],
+        ].map(([k,label,icon])=>(
+          <div key={k} onClick={()=>toggle(k)} style={{cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"space-between",padding:"0.6rem 0",borderBottom:"1px solid #1e1e1e"}}>
+            <div style={{display:"flex",alignItems:"center",gap:"0.65rem",flex:1,paddingRight:"0.75rem"}}>
+              <span style={{fontSize:"1.2rem",flexShrink:0}}>{icon}</span>
+              <span style={{color:"#f5f0e8",fontSize:"0.88rem",lineHeight:1.3}}>{label}</span>
+            </div>
+            <div style={{width:"40px",height:"22px",borderRadius:"999px",background:local[k]?"#c9a84c":"#333",position:"relative",transition:"background 0.2s",flexShrink:0}}>
+              <div style={{position:"absolute",top:"3px",left:local[k]?"21px":"3px",width:"16px",height:"16px",borderRadius:"50%",background:"#fff",transition:"left 0.2s"}}/>
+            </div>
+          </div>
+        ))}
+        <textarea value={local.notes} onChange={e=>setLocal(p=>({...p,notes:e.target.value}))} placeholder="Extra instructions for Claude…" rows={2} style={{...S.input,resize:"vertical",marginBottom:0,marginTop:"0.75rem"}}/>
+      </div>
+
+      {/* Custom rules */}
+      <div style={{...S.card,marginBottom:"1rem"}}>
+        <label style={{color:"#a89f8c",fontSize:"0.82rem",letterSpacing:"0.08em",textTransform:"uppercase",display:"block",marginBottom:"0.5rem"}}>✏️ Custom Rules</label>
+        <p style={{color:"#666",fontSize:"0.8rem",margin:"0 0 0.75rem"}}>Write any rule in plain English. Claude will follow it when generating plans.</p>
+        <div style={{display:"flex",gap:"0.5rem",marginBottom:"0.75rem"}}>
+          <input value={newRule} onChange={e=>setNewRule(e.target.value)} onKeyDown={e=>e.key==="Enter"&&addRule()}
+            placeholder="e.g. Include fish at least once a week" style={{...S.input,flex:1,marginBottom:0}}/>
+          <button onClick={addRule} style={S.smallBtn}>Add</button>
+        </div>
+        {(local.customRules||[]).length===0?<p style={{color:"#555",fontSize:"0.85rem"}}>No custom rules yet.</p>:(
+          <div style={{display:"flex",flexDirection:"column",gap:"0.4rem"}}>
+            {(local.customRules||[]).map(rule=>(
+              <div key={rule.id} style={{display:"flex",alignItems:"center",gap:"0.5rem",padding:"0.5rem 0.65rem",background:"#1a1a1a",borderRadius:"8px",border:"1px solid #2a2a2a"}}>
+                <div onClick={()=>toggleRule(rule.id)} style={{width:"32px",height:"18px",borderRadius:"999px",background:rule.enabled?"#c9a84c":"#333",position:"relative",transition:"background 0.2s",flexShrink:0,cursor:"pointer"}}>
+                  <div style={{position:"absolute",top:"2px",left:rule.enabled?"16px":"2px",width:"14px",height:"14px",borderRadius:"50%",background:"#fff",transition:"left 0.2s"}}/>
+                </div>
+                <span style={{flex:1,color:rule.enabled?"#f5f0e8":"#555",fontSize:"0.88rem"}}>{rule.text}</span>
+                <button onClick={()=>deleteRule(rule.id)} style={{background:"transparent",border:"none",color:"#555",cursor:"pointer",fontSize:"1rem",padding:"0 0.25rem"}}>×</button>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+
+      {/* Shopping categories */}
+      <div style={{...S.card,marginBottom:"1rem"}}>
+        <label style={{color:"#a89f8c",fontSize:"0.82rem",letterSpacing:"0.08em",textTransform:"uppercase",display:"block",marginBottom:"0.5rem"}}>🗂 Shopping Categories</label>
+        <p style={{color:"#666",fontSize:"0.8rem",margin:"0 0 0.75rem"}}>Rename, reorder or add categories used in the favourites shopping list.</p>
+
+        {/* Add new category */}
+        <div style={{display:"flex",gap:"0.5rem",marginBottom:"0.75rem"}}>
+          <input value={newCat} onChange={e=>setNewCat(e.target.value)} onKeyDown={e=>{ if(e.key==="Enter"&&newCat.trim()){ setLocalCats(p=>[...p,newCat.trim()]); setNewCat(""); }}}
+            placeholder="New category name…" style={{...S.input,flex:1,marginBottom:0,fontSize:"0.88rem"}}/>
+          <button onClick={()=>{ if(!newCat.trim()) return; setLocalCats(p=>[...p,newCat.trim()]); setNewCat(""); }} style={S.smallBtn}>Add</button>
+        </div>
+
+        {/* Category list */}
+        <div style={{display:"flex",flexDirection:"column",gap:"0.35rem"}}>
+          {localCats.map((cat,idx)=>(
+            <div key={idx} style={{display:"flex",alignItems:"center",gap:"0.5rem",padding:"0.45rem 0.7rem",background:"#111",borderRadius:"8px",border:"1px solid #2a2a2a"}}>
+              {/* Reorder buttons */}
+              <div style={{display:"flex",flexDirection:"column",gap:"1px",flexShrink:0}}>
+                <button onClick={()=>{ if(idx===0) return; const c=[...localCats]; [c[idx-1],c[idx]]=[c[idx],c[idx-1]]; setLocalCats(c); }}
+                  style={{background:"transparent",border:"none",color:idx===0?"#333":"#666",cursor:idx===0?"default":"pointer",fontSize:"0.65rem",padding:"0",lineHeight:1}}>▲</button>
+                <button onClick={()=>{ if(idx===localCats.length-1) return; const c=[...localCats]; [c[idx],c[idx+1]]=[c[idx+1],c[idx]]; setLocalCats(c); }}
+                  style={{background:"transparent",border:"none",color:idx===localCats.length-1?"#333":"#666",cursor:idx===localCats.length-1?"default":"pointer",fontSize:"0.65rem",padding:"0",lineHeight:1}}>▼</button>
+              </div>
+              {/* Name / edit */}
+              {editingCat===idx ? (
+                <div style={{display:"flex",gap:"0.4rem",flex:1,alignItems:"center"}}>
+                  <input value={editCatVal} onChange={e=>setEditCatVal(e.target.value)}
+                    onKeyDown={e=>{ if(e.key==="Enter"&&editCatVal.trim()){ const c=[...localCats]; c[idx]=editCatVal.trim(); setLocalCats(c); setEditingCat(null); }}}
+                    autoFocus style={{...S.input,flex:1,marginBottom:0,padding:"0.3rem 0.5rem",fontSize:"0.88rem"}}/>
+                  <button onClick={()=>{ if(!editCatVal.trim()) return; const c=[...localCats]; c[idx]=editCatVal.trim(); setLocalCats(c); setEditingCat(null); }} style={S.smallBtn}>Save</button>
+                  <button onClick={()=>setEditingCat(null)} style={{...S.smallBtn,background:"#333",color:"#aaa"}}>✕</button>
+                </div>
+              ) : (
+                <>
+                  <span style={{flex:1,color:"#f5f0e8",fontSize:"0.9rem"}}>{cat}</span>
+                  <button onClick={()=>{ setEditingCat(idx); setEditCatVal(cat); }} style={{background:"transparent",border:"none",color:"#666",cursor:"pointer",fontSize:"0.82rem",padding:"0.1rem 0.3rem"}}>✏️</button>
+                  <button onClick={()=>setLocalCats(p=>p.filter((_,i)=>i!==idx))}
+                    style={{background:"transparent",border:"none",color:"#555",cursor:"pointer",fontSize:"0.9rem",padding:"0.1rem 0.3rem"}}>✕</button>
+                </>
+              )}
+            </div>
+          ))}
+        </div>
+        <p style={{color:"#555",fontSize:"0.75rem",margin:"0.6rem 0 0"}}>Changes apply when you tap Save Settings below.</p>
+      </div>
+
+      {/* Learned prefs */}
+      <div style={{...S.card,marginBottom:"1rem"}}>
+        <label style={{color:"#a89f8c",fontSize:"0.82rem",letterSpacing:"0.08em",textTransform:"uppercase",display:"block",marginBottom:"0.5rem"}}>🧠 Learned Shopping Preferences</label>
+        <p style={{color:"#888",fontSize:"0.85rem",margin:"0 0 0.75rem"}}>
+          <strong style={{color:"#c9a84c"}}>{learnedCount}</strong> item{learnedCount!==1?"s":""} learned.
+        </p>
+        {learnedCount>0&&(
+          <>
+            <div style={{maxHeight:"140px",overflowY:"auto",marginBottom:"0.75rem",display:"flex",flexDirection:"column",gap:"0.3rem"}}>
+              {Object.entries(itemPrefs).map(([item,sec])=>(
+                <div key={item} style={{display:"flex",justifyContent:"space-between",fontSize:"0.82rem",padding:"0.2rem 0",borderBottom:"1px solid #1e1e1e"}}>
+                  <span style={{color:"#ccc"}}>{item}</span>
+                  <span style={{color:sec==="online"?"#60a5fa":"#4ade80",fontSize:"0.75rem"}}>{sec==="online"?"🌐":"🏪"} {sec}</span>
+                </div>
+              ))}
+            </div>
+            <button onClick={async()=>{await saveItemPrefs({});showToast("Cleared");}} style={{...S.smallBtn,background:"transparent",color:"#f87171",border:"1px solid #f87171"}}>Clear learned</button>
+          </>
+        )}
+      </div>
+
+      <button onClick={save} style={S.primaryBtn}>Save Settings</button>
+    </div>
+  );
+}
+
+// ── Styles ────────────────────────────────────────────────────────────────
+const S = {
+  app:           { fontFamily:"'DM Sans',sans-serif", background:"#111", minHeight:"100vh", color:"#f5f0e8" },
+  loadingScreen: { display:"flex", flexDirection:"column", alignItems:"center", justifyContent:"center", height:"100vh", background:"#111" },
+  spinner:       { width:"36px", height:"36px", border:"3px solid #333", borderTop:"3px solid #c9a84c", borderRadius:"50%", animation:"spin 0.8s linear infinite" },
+  header:        { background:"#1a1a1a", borderBottom:"1px solid #2a2a2a", padding:"1.5rem 1rem 0", textAlign:"center" },
+  title:         { fontFamily:"'Playfair Display',serif", fontSize:"clamp(1.4rem,4vw,1.9rem)", margin:"0 0 1rem", fontWeight:"400", color:"#f5f0e8" },
+  nav:           { display:"flex", justifyContent:"center", flexWrap:"wrap" },
+  navBtn:        { padding:"0.5rem 0.7rem", border:"none", borderBottom:"2px solid transparent", background:"transparent", color:"#777", cursor:"pointer", fontFamily:"'DM Sans',sans-serif", fontSize:"0.78rem", whiteSpace:"nowrap" },
+  navBtnActive:  { color:"#c9a84c", borderBottomColor:"#c9a84c" },
+  main:          { maxWidth:"680px", margin:"0 auto", padding:"1.5rem 1rem 4rem" },
+  card:          { background:"#1a1a1a", borderRadius:"12px", padding:"1.25rem", border:"1px solid #2a2a2a" },
+  recipeTitle:   { fontFamily:"'Playfair Display',serif", fontSize:"1.4rem", fontWeight:"400", color:"#f5f0e8", margin:"0 0 0.5rem" },
+  recipeRow:     { background:"#1a1a1a", border:"1px solid #2a2a2a", borderRadius:"10px", padding:"0.9rem 1.1rem", cursor:"pointer", display:"flex", justifyContent:"space-between", alignItems:"center", gap:"0.75rem" },
+  planRow:       { background:"#1a1a1a", border:"1px solid #2a2a2a", borderRadius:"10px", padding:"0.9rem 1.1rem", display:"flex", alignItems:"center", gap:"1rem" },
+  shoppingItem:  { background:"#1a1a1a", borderRadius:"8px", border:"1px solid #2a2a2a", overflow:"hidden" },
+  checkbox:      { width:"20px", height:"20px", borderRadius:"5px", border:"2px solid #444", flexShrink:0, display:"flex", alignItems:"center", justifyContent:"center" },
+  checkboxChecked:{ background:"#4ade80", borderColor:"#4ade80" },
+  timeChip:      { background:"#2a2a2a", color:"#c9a84c", padding:"0.25rem 0.65rem", borderRadius:"999px", fontSize:"0.8rem", whiteSpace:"nowrap", flexShrink:0 },
+  sectionHead:   { fontFamily:"'Playfair Display',serif", fontWeight:"400", color:"#c9a84c", margin:"1.25rem 0 0.5rem", fontSize:"1rem", letterSpacing:"0.05em", textTransform:"uppercase" },
+  list:          { color:"#ccc", lineHeight:1.7, paddingLeft:"1.2rem", margin:"0 0 0.5rem" },
+  input:         { width:"100%", background:"#222", border:"1px solid #333", borderRadius:"8px", padding:"0.65rem 0.9rem", color:"#f5f0e8", fontFamily:"inherit", fontSize:"0.95rem", marginBottom:"0.75rem", boxSizing:"border-box", outline:"none" },
+  primaryBtn:    { background:"#c9a84c", color:"#1a1a1a", border:"none", borderRadius:"8px", padding:"0.65rem 1.4rem", cursor:"pointer", fontFamily:"inherit", fontWeight:"600", fontSize:"0.92rem" },
+  smallBtn:      { background:"#c9a84c", color:"#1a1a1a", border:"none", borderRadius:"6px", padding:"0.35rem 0.8rem", cursor:"pointer", fontFamily:"inherit", fontWeight:"600", fontSize:"0.82rem" },
+  deleteBtn:     { background:"transparent", color:"#f87171", border:"1px solid #f87171", borderRadius:"6px", padding:"0.35rem 0.8rem", cursor:"pointer", fontFamily:"inherit", fontSize:"0.82rem" },
+  backBtn:       { background:"transparent", color:"#a89f8c", border:"none", cursor:"pointer", fontFamily:"inherit", fontSize:"0.9rem", padding:"0 0 1rem", display:"block" },
+  modeBtn:       { background:"#1a1a1a", border:"1px solid #333", color:"#888", borderRadius:"8px", padding:"0.5rem 1rem", cursor:"pointer", fontFamily:"inherit", fontSize:"0.88rem" },
+  modeBtnActive: { background:"#c9a84c", color:"#1a1a1a", borderColor:"#c9a84c", fontWeight:"600" },
+  slotBtn:       { background:"#222", border:"1px solid #333", color:"#aaa", borderRadius:"8px", padding:"0.4rem 0.75rem", cursor:"pointer", fontFamily:"inherit", fontSize:"0.82rem", textAlign:"center", minWidth:"80px" },
+  editTimeBtn:   { background:"transparent", border:"1px solid #333", color:"#777", borderRadius:"6px", padding:"0.25rem 0.65rem", cursor:"pointer", fontFamily:"inherit", fontSize:"0.8rem" },
+  emptyState:    { textAlign:"center", color:"#666", padding:"3rem 1rem", background:"#1a1a1a", borderRadius:"12px", border:"1px dashed #2a2a2a" },
+  hint:          { color:"#888", fontSize:"0.875rem", marginBottom:"0.75rem" },
+  toast:         { position:"fixed", bottom:"1.5rem", left:"50%", transform:"translateX(-50%)", padding:"0.6rem 1.4rem", borderRadius:"999px", color:"#1a1a2e", fontWeight:"600", fontSize:"0.9rem", zIndex:9999, fontFamily:"DM Sans,sans-serif", boxShadow:"0 4px 20px rgba(0,0,0,0.4)", whiteSpace:"nowrap" },
+  qtyBtn:        { background:"#2a2a2a", border:"1px solid #333", color:"#f5f0e8", borderRadius:"6px", width:"28px", height:"28px", cursor:"pointer", fontFamily:"inherit", fontSize:"1rem", display:"flex", alignItems:"center", justifyContent:"center" },
+  overrideOption:{ width:"100%", textAlign:"left", padding:"0.55rem 0.8rem", background:"#1a1a1a", border:"1px solid", borderRadius:"8px", cursor:"pointer", fontFamily:"inherit", fontSize:"0.88rem", transition:"all 0.15s" },
+};
+
+const { useState, useEffect, useRef } = React;
+ReactDOM.createRoot(document.getElementById('root')).render(React.createElement(App));
+  </script>
+</body>
 </html>
