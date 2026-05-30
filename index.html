@@ -363,9 +363,9 @@ function PlannerTab({ recipes, family, prefs, freezer, showToast, DAYS, planData
         prefs.matchSchoolMeals&&child&&"- Avoid dinner with same main carb as child's school lunch that day",
         prefs.avoidPreviousWeekMeals&&prevMealsStr&&`- Do NOT use any of these meals that were planned last week: ${prevMealsStr}`,
         prefs.limitMeatRepeat&&"- Do not use the same type of meat (e.g. chicken, beef, pork, lamb) more than 3 times across the whole week",
-        prefs.mondayPrawns&&`- On ${DAYS[DAYS.length-1]==="Monday"?DAYS[DAYS.length-1]:"Monday"}, use a prawn or seafood dish (frozen prawns are available)`,
+        prefs.mondayPrawns&&"- On Monday, use a prawn or seafood dish (frozen prawns are available)",
         prefs.prioritiseMissedMeals&&"- If a family member is not eating on a given night, prioritise recipes that they cannot eat (marked as 'won't eat') so those meals are used on nights they're absent",
-        prefs.fridayTakeaway&&"- Plan Friday as Takeaway night — assign "🍕 Takeaway" to Friday and do not assign a recipe for that night",
+        prefs.fridayTakeaway&&"- Plan Friday as Takeaway night - assign Takeaway to Friday and do not assign a recipe for that night",
         prefs.notes&&`- Extra: ${prefs.notes}`,
       ].filter(Boolean);
       const customRules = (prefs.customRules||[]).filter(r=>r.enabled).map(r=>`- ${r.text}`);
