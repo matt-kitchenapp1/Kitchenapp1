@@ -109,7 +109,7 @@ async function callClaude(system, user, imageBase64=null, mediaType=null) {
 }
 
 // ── Root ──────────────────────────────────────────────────────────────────
-export default function App() {
+function App() {
   const [tab, setTab]               = useState("current");
   const [recipes, setRecipes]       = useState([]);
   const [currentPlan, setCurrentPlan]   = useState({ plan:{}, schedule:{}, diners:{}, schoolMeals:{} });
