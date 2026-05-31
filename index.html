@@ -76,6 +76,8 @@ const DEFAULT_PREFS = {
   limitMeatRepeat:false,
   mondayPrawns:false,
   avoidConsecutivePotato:false,
+  avoidConsecutiveNoodles:false,
+  avoidConsecutiveBulgur:false,
   prioritiseMissedMeals:false,
   fridayTakeaway:false,
   useFreezerIngredients:false,
@@ -365,6 +367,8 @@ function PlannerTab({ recipes, family, prefs, freezer, freezerIngredients, showT
         prefs.avoidConsecutivePasta&&"- No pasta-based meals on consecutive nights",
         prefs.avoidConsecutiveRice&&"- No rice-based meals on consecutive nights",
         prefs.avoidConsecutivePotato&&"- No potato-based meals on consecutive nights",
+        prefs.avoidConsecutiveNoodles&&"- No noodle-based meals on consecutive nights",
+        prefs.avoidConsecutiveBulgur&&"- No bulgur wheat-based meals on consecutive nights",
         prefs.matchSchoolMeals&&child&&"- Avoid dinner with same main carb as child's school lunch that day",
         prefs.avoidPreviousWeekMeals&&prevMealsStr&&`- Do NOT use any of these meals that were planned last week: ${prevMealsStr}`,
         prefs.limitMeatRepeat&&"- Do not use the same meat type (as tagged in the recipe list above) more than 3 times across the whole week",
@@ -1069,7 +1073,7 @@ function RecipesTab({ recipes, saveRecipes, family, showToast }) {
   const [addingIng, setAddingIng]       = useState(false);
   const [newIngVal, setNewIngVal]       = useState("");
 
-  const CARB_LABELS = { none:"No main carb", pasta:"🍝 Pasta", rice:"🍚 Rice", bread:"🍞 Bread", potato:"🥔 Potato", other:"Other" };
+  const CARB_LABELS = { none:"No main carb", pasta:"🍝 Pasta", rice:"🍚 Rice", noodles:"🍜 Noodles", bread:"🍞 Bread", potato:"🥔 Potato", bulgur:"🌾 Bulgur Wheat", other:"Other" };
   const FREEZER_INGREDIENT_TYPES = [
   { key:"chickenBreast", label:"Chicken Breast", isMeat:true },
   { key:"chickenThigh",  label:"Chicken Thigh",  isMeat:true },
@@ -1331,7 +1335,7 @@ const MEAT_LABELS = { none:"None", chicken:"Chicken", porkMince:"Pork Mince", sa
               <div style={{flex:1}}>
                 <label style={{color:"#a89f8c",fontSize:"0.78rem",letterSpacing:"0.08em",textTransform:"uppercase",display:"block",marginBottom:"0.3rem"}}>Main carb</label>
                 <select value={manualCarb} onChange={e=>setManualCarb(e.target.value)} style={{...S.input,marginBottom:0}}>
-                  {[["none","None"],["pasta","🍝 Pasta"],["rice","🍚 Rice"],["bread","🍞 Bread"],["potato","🥔 Potato"],["other","Other"]].map(([k,l])=><option key={k} value={k}>{l}</option>)}
+                  {Object.entries(CARB_LABELS).map(([k,l])=><option key={k} value={k}>{l}</option>)}
                 </select>
               </div>
             </div>
@@ -1462,6 +1466,8 @@ function SettingsTab({ prefs, savePrefs, weekStart, saveWeekStart, itemPrefs, sa
           ["avoidConsecutivePasta","Avoid pasta two nights in a row","🍝"],
           ["avoidConsecutiveRice","Avoid rice two nights in a row","🍚"],
           ["avoidConsecutivePotato","Avoid potatoes two nights in a row","🥔"],
+          ["avoidConsecutiveNoodles","Avoid noodles two nights in a row","🍜"],
+          ["avoidConsecutiveBulgur","Avoid bulgur wheat two nights in a row","🌾"],
           ["matchSchoolMeals","Avoid dinner repeating the child's school lunch","🏫"],
           ["avoidPreviousWeekMeals","Don't repeat any meal used in the previous week","🔁"],
           ["limitMeatRepeat","Don't use the same type of meat more than 3 times in a week","🥩"],
