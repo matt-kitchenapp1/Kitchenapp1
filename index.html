@@ -362,7 +362,7 @@ function PlannerTab({ recipes, family, prefs, freezer, showToast, DAYS, planData
         prefs.avoidConsecutivePotato&&"- No potato-based meals on consecutive nights",
         prefs.matchSchoolMeals&&child&&"- Avoid dinner with same main carb as child's school lunch that day",
         prefs.avoidPreviousWeekMeals&&prevMealsStr&&`- Do NOT use any of these meals that were planned last week: ${prevMealsStr}`,
-        prefs.limitMeatRepeat&&"- Do not use the same type of meat (e.g. chicken, beef, pork, lamb) more than 3 times across the whole week",
+        prefs.limitMeatRepeat&&"- Do not use the same meat type (as tagged in the recipe list above) more than 3 times across the whole week",
         prefs.mondayPrawns&&"- On Monday, use a prawn or seafood dish (frozen prawns are available)",
         prefs.prioritiseMissedMeals&&"- If a family member is not eating on a given night, prioritise recipes that they cannot eat (marked as 'won't eat') so those meals are used on nights they're absent",
         prefs.fridayTakeaway&&"- Plan Friday as Takeaway night - assign Takeaway to Friday and do not assign a recipe for that night",
@@ -371,7 +371,7 @@ function PlannerTab({ recipes, family, prefs, freezer, showToast, DAYS, planData
       const customRules = (prefs.customRules||[]).filter(r=>r.enabled).map(r=>`- ${r.text}`);
       const allRules = [...builtinRules, ...customRules].join("\n");
       const recipeListStr = dayInfo.map(d=>{
-        const names = d.eligible.map(r=>`  - ${r.name} (${r.cookTime}min, carb:${r.mainCarb||"none"})`).join("\n");
+        const names = d.eligible.map(r=>`  - ${r.name} (${r.cookTime}min, carb:${r.mainCarb||"none"}, meat:${r.mainMeat||"none"})`).join("\n");
         const eatingNames = d.eating.map(id=>family.find(m=>m.id===id)?.name||id).join(", ");
         const schoolNote = d.schoolMeal?`  School lunch: "${d.schoolMeal}"`:"";
         return `${d.day} [UP TO ${d.maxTime}min — any shorter meal is fine too, eating:${eatingNames}]:\n${schoolNote}\n${names||"  (no suitable recipes)"}`;
@@ -918,6 +918,7 @@ function RecipesTab({ recipes, saveRecipes, family, showToast }) {
   const [manualName, setManualName]   = useState("");
   const [manualTime, setManualTime]   = useState("30");
   const [manualCarb, setManualCarb]   = useState("none");
+  const [manualMeat, setManualMeat]   = useState("none");
   const [manualIngs, setManualIngs]   = useState("");
   const [manualSteps, setManualSteps] = useState("");
   const fileRef = useRef();
@@ -933,6 +934,7 @@ function RecipesTab({ recipes, saveRecipes, family, showToast }) {
   const [newIngVal, setNewIngVal]       = useState("");
 
   const CARB_LABELS = { none:"No main carb", pasta:"🍝 Pasta", rice:"🍚 Rice", bread:"🍞 Bread", potato:"🥔 Potato", other:"Other" };
+  const MEAT_LABELS = { none:"None", chicken:"Chicken", porkMince:"Pork Mince", sausages:"Sausages", prawns:"Prawns", turkeyMince:"Turkey Mince", beef:"Beef", pork:"Pork", lamb:"Lamb", fish:"Fish", bacon:"Bacon" };
 
   const processRecipe = async (source, imageBase64=null, mediaType=null) => {
     setProcessing(true); setApiError("");
@@ -943,7 +945,7 @@ function RecipesTab({ recipes, saveRecipes, family, showToast }) {
       try { parsed = JSON.parse(raw.replace(/```json|```/g,"").trim()); }
       catch(e) { throw new Error("API returned invalid JSON. The API may not be available in preview mode."); }
       const suitability = {}; family.forEach(m => { suitability[m.id] = "yes"; });
-      const recipe = { id:Date.now().toString(), name:parsed.name||"Unnamed Recipe", cookTime:parsed.cookTime||30, ingredients:parsed.ingredients||[], steps:parsed.steps||[], notes:parsed.notes||"", mainCarb:parsed.mainCarb||"none", suitability, addedAt:new Date().toISOString() };
+      const recipe = { id:Date.now().toString(), name:parsed.name||"Unnamed Recipe", cookTime:parsed.cookTime||30, ingredients:parsed.ingredients||[], steps:parsed.steps||[], notes:parsed.notes||"", mainCarb:parsed.mainCarb||"none", mainMeat:parsed.mainMeat||"none", suitability, addedAt:new Date().toISOString() };
       await saveRecipes([...recipes, recipe]);
       showToast(`✓ "${recipe.name}" added!`);
       setView("list"); setInputUrl(""); setInputText("");
@@ -959,7 +961,7 @@ function RecipesTab({ recipes, saveRecipes, family, showToast }) {
     const suitability = {}; family.forEach(m => { suitability[m.id] = "yes"; });
     const ings  = manualIngs.split("\n").map(s=>s.trim()).filter(Boolean);
     const steps = manualSteps.split("\n").map(s=>s.trim()).filter(Boolean);
-    const recipe = { id:Date.now().toString(), name:manualName.trim(), cookTime:parseInt(manualTime)||30, ingredients:ings, steps, notes:"", mainCarb:manualCarb, suitability, addedAt:new Date().toISOString() };
+    const recipe = { id:Date.now().toString(), name:manualName.trim(), cookTime:parseInt(manualTime)||30, ingredients:ings, steps, notes:"", mainCarb:manualCarb, mainMeat:manualMeat, suitability, addedAt:new Date().toISOString() };
     await saveRecipes([...recipes, recipe]);
     showToast(`✓ "${recipe.name}" added!`);
     setView("list"); setManualName(""); setManualTime("30"); setManualCarb("none"); setManualIngs(""); setManualSteps("");
@@ -1048,6 +1050,18 @@ function RecipesTab({ recipes, saveRecipes, family, showToast }) {
               {Object.entries(CARB_LABELS).map(([k,l])=>(
                 <button key={k} onClick={()=>updateRecipe(r.id,{mainCarb:k})}
                   style={{padding:"0.25rem 0.6rem",borderRadius:"6px",fontSize:"0.78rem",cursor:"pointer",fontFamily:"inherit",border:"1px solid",borderColor:(r.mainCarb||"none")===k?"#c9a84c":"#333",background:(r.mainCarb||"none")===k?"#2d2000":"transparent",color:(r.mainCarb||"none")===k?"#c9a84c":"#555"}}>
+                  {l}
+                </button>
+              ))}
+            </div>
+          </div>
+          {/* ── Main meat ── */}
+          <div style={{marginBottom:"1rem"}}>
+            <label style={{color:"#a89f8c",fontSize:"0.78rem",letterSpacing:"0.08em",textTransform:"uppercase",display:"block",marginBottom:"0.4rem"}}>Main meat</label>
+            <div style={{display:"flex",gap:"0.35rem",flexWrap:"wrap"}}>
+              {Object.entries(MEAT_LABELS).map(([k,l])=>(
+                <button key={k} onClick={()=>updateRecipe(r.id,{mainMeat:k})}
+                  style={{padding:"0.25rem 0.6rem",borderRadius:"6px",fontSize:"0.78rem",cursor:"pointer",fontFamily:"inherit",border:"1px solid",borderColor:(r.mainMeat||"none")===k?"#60a5fa":"#333",background:(r.mainMeat||"none")===k?"#1a2a3a":"transparent",color:(r.mainMeat||"none")===k?"#60a5fa":"#555"}}>
                   {l}
                 </button>
               ))}
@@ -1168,6 +1182,15 @@ function RecipesTab({ recipes, saveRecipes, family, showToast }) {
                   {[["none","None"],["pasta","🍝 Pasta"],["rice","🍚 Rice"],["bread","🍞 Bread"],["potato","🥔 Potato"],["other","Other"]].map(([k,l])=><option key={k} value={k}>{l}</option>)}
                 </select>
               </div>
+            </div>
+            <div style={{display:"flex",gap:"0.5rem",marginBottom:"0.75rem"}}>
+              <div style={{flex:1}}>
+                <label style={{color:"#a89f8c",fontSize:"0.78rem",letterSpacing:"0.08em",textTransform:"uppercase",display:"block",marginBottom:"0.3rem"}}>Main meat</label>
+                <select value={manualMeat} onChange={e=>setManualMeat(e.target.value)} style={{...S.input,marginBottom:0}}>
+                  {Object.entries(MEAT_LABELS).map(([k,l])=><option key={k} value={k}>{l}</option>)}
+                </select>
+              </div>
+              <div style={{flex:1}}/>
             </div>
             <label style={{color:"#a89f8c",fontSize:"0.78rem",letterSpacing:"0.08em",textTransform:"uppercase",display:"block",marginBottom:"0.3rem"}}>Ingredients (one per line)</label>
             <textarea value={manualIngs} onChange={e=>setManualIngs(e.target.value)} placeholder={"280g diced chicken breast\n1 red onion, sliced\n200g rigatoni\n..."} rows={6} style={{...S.input,resize:"vertical"}}/>
