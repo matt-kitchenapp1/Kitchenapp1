@@ -78,6 +78,7 @@ const DEFAULT_PREFS = {
   avoidConsecutivePotato:false,
   prioritiseMissedMeals:false,
   fridayTakeaway:false,
+  useFreezerIngredients:false,
   customRules:[], // [{ id, text, enabled }]
 };
 const DEFAULT_CATEGORIES = ["Fruit & Veg","Meat & Fish","Dairy","Bakery","Tins & Jars","Dry Goods","Drinks","Snacks","Frozen","Cleaning","Other"];
@@ -191,7 +192,8 @@ function App() {
     ["current","📅 This Week"],["upcoming","🗓 Next Week"],["recipes","📖 Recipes"],
     ["shopping","🛒 Shopping"],["freezer","🧊 Freezer"],["family","👨‍👩‍👧 Family"],["prefs","⚙️ Settings"],
   ];
-  const planProps = { recipes, family, prefs, freezer, showToast, DAYS, classifyItem, filterPantry };
+  const freezerIngredients = freezer.filter(i=>i.isIngredient);
+  const planProps = { recipes, family, prefs, freezer, freezerIngredients, showToast, DAYS, classifyItem, filterPantry };
 
   return (
     <div style={S.app}>
@@ -247,7 +249,7 @@ function App() {
 }
 
 // ── Planner Tab ───────────────────────────────────────────────────────────
-function PlannerTab({ recipes, family, prefs, freezer, showToast, DAYS, planData, savePlan, saveShopping, classifyItem, filterPantry, isCurrentWeek, label, onPromoteToCurrentWeek }) {
+function PlannerTab({ recipes, family, prefs, freezer, freezerIngredients, showToast, DAYS, planData, savePlan, saveShopping, classifyItem, filterPantry, isCurrentWeek, label, onPromoteToCurrentWeek }) {
   const [localSchedule, setLocalSchedule] = useState(planData.schedule||{});
   const [localDiners, setLocalDiners]     = useState(()=>{ const d={}; DAYS.forEach(day=>{d[day]=(planData.diners||{})[day]||family.map(m=>m.id);}); return d; });
   const [localSchool, setLocalSchool]     = useState(planData.schoolMeals||{});
@@ -258,6 +260,8 @@ function PlannerTab({ recipes, family, prefs, freezer, showToast, DAYS, planData
   const [overrideDay, setOverrideDay]     = useState(null);
   const [overrideUpdating, setOverrideUpdating] = useState(false);
   const [manualMealVal, setManualMealVal] = useState("");
+  // freezerFlags: { Monday: { meat: false, other: false }, ... }
+  const [freezerFlags, setFreezerFlags] = useState(planData.freezerFlags||{});
   // extraPeople: { Monday: 0, Tuesday: 2, … } — additional guests beyond the household
   const [extraPeople, setExtraPeople]     = useState(planData.extraPeople||{});
 
@@ -267,6 +271,7 @@ function PlannerTab({ recipes, family, prefs, freezer, showToast, DAYS, planData
     setLocalSchool(planData.schoolMeals||{});
     setLocalPlan(planData.plan||{});
     setExtraPeople(planData.extraPeople||{});
+    setFreezerFlags(planData.freezerFlags||{});
     setStep(Object.keys(planData.plan||{}).length>0?"plan":"schedule");
   },[planData]);
 
@@ -316,7 +321,7 @@ function PlannerTab({ recipes, family, prefs, freezer, showToast, DAYS, planData
     setLocalPlan(newPlan);
     setOverrideDay(null);
     setManualMealVal("");
-    const newPlanData = { plan:newPlan, schedule:localSchedule, diners:localDiners, schoolMeals:localSchool, extraPeople };
+    const newPlanData = { plan:newPlan, schedule:localSchedule, diners:localDiners, schoolMeals:localSchool, extraPeople, freezerFlags };
     await savePlan(newPlanData);
     await rebuildShopping(newPlan);
     showToast("Meal updated & shopping list refreshed ✓");
@@ -366,6 +371,7 @@ function PlannerTab({ recipes, family, prefs, freezer, showToast, DAYS, planData
         prefs.mondayPrawns&&"- On Monday, use a prawn or seafood dish (frozen prawns are available)",
         prefs.prioritiseMissedMeals&&"- If a family member is not eating on a given night, prioritise recipes that they cannot eat (marked as 'won't eat') so those meals are used on nights they're absent",
         prefs.fridayTakeaway&&"- Plan Friday as Takeaway night - assign Takeaway to Friday and do not assign a recipe for that night",
+        prefs.useFreezerIngredients&&freezerIngredients.length>0&&`- Try to include at least one meal that uses these freezer ingredients if possible: ${freezerIngredients.map(i=>i.label+' ('+i.qty+')').join(', ')}`,
         prefs.notes&&`- Extra: ${prefs.notes}`,
       ].filter(Boolean);
       const customRules = (prefs.customRules||[]).filter(r=>r.enabled).map(r=>`- ${r.text}`);
@@ -386,7 +392,7 @@ function PlannerTab({ recipes, family, prefs, freezer, showToast, DAYS, planData
       const previousWeekMeals = !isCurrentWeek
         ? [] // upcoming plan doesn't need to track its own prev week here; that comes from current
         : Object.values(normalised).filter(n=>n&&n!=="—"&&!n.startsWith("🧊"));
-      const newPlanData = { plan:normalised, schedule:localSchedule, diners:localDiners, schoolMeals:localSchool, previousWeekMeals, extraPeople };
+      const newPlanData = { plan:normalised, schedule:localSchedule, diners:localDiners, schoolMeals:localSchool, previousWeekMeals, extraPeople, freezerFlags };
       await savePlan(newPlanData);
       setLocalPlan(normalised);
       await rebuildShopping(normalised);
@@ -518,6 +524,55 @@ function PlannerTab({ recipes, family, prefs, freezer, showToast, DAYS, planData
                         <div style={{flex:1}}>
                           <div style={{color:meal&&meal!=="—"?"#f5f0e8":"#555",fontSize:"0.95rem"}}>{meal||"—"}</div>
                           {school&&<div style={{fontSize:"0.72rem",color:"#666",marginTop:"0.2rem"}}>🏫 {school}</div>}
+                          {/* Freezer checkboxes */}
+                          <div style={{display:"flex",gap:"0.5rem",marginTop:"0.3rem",flexWrap:"wrap"}}>
+                            {[["meat","Meat in freezer"],["other","Other item in freezer"]].map(([k,lbl])=>{
+                              const checked = freezerFlags[day]?.[k]||false;
+                              return (
+                                <label key={k} style={{display:"flex",alignItems:"center",gap:"0.25rem",cursor:"pointer",fontSize:"0.72rem",color:checked?"#4ade80":"#555"}}>
+                                  <input type="checkbox" checked={checked} onChange={async()=>{
+                                    const updated = {...freezerFlags, [day]:{...freezerFlags[day],[k]:!checked}};
+                                    setFreezerFlags(updated);
+                                    await savePlan({plan:localPlan,schedule:localSchedule,diners:localDiners,schoolMeals:localSchool,extraPeople,freezerFlags:updated});
+                                  }} style={{accentColor:"#4ade80"}}/>
+                                  {lbl}
+                                </label>
+                              );
+                            })}
+                          </div>
+                          {/* Reminder button — only show if any freezer flag is set */}
+                          {(freezerFlags[day]?.meat||freezerFlags[day]?.other)&&meal&&meal!=="—"&&(()=>{
+                            // Calculate 22:30 the night before
+                            const dayIdx = DAYS.indexOf(day);
+                            const prevDay = DAYS[(dayIdx-1+DAYS.length)%DAYS.length];
+                            return (
+                              <button onClick={()=>{
+                                const now = new Date();
+                                // Find next occurrence of prevDay
+                                const dayNames = ["Sunday","Monday","Tuesday","Wednesday","Thursday","Friday","Saturday"];
+                                const targetDay = dayNames.indexOf(prevDay);
+                                const todayDay = now.getDay();
+                                let daysUntil = (targetDay - todayDay + 7) % 7 || 7;
+                                const reminderDate = new Date(now);
+                                reminderDate.setDate(now.getDate() + daysUntil);
+                                reminderDate.setHours(22,30,0,0);
+                                const pad = n=>String(n).padStart(2,"0");
+                                const dtStr = `${reminderDate.getFullYear()}${pad(reminderDate.getMonth()+1)}${pad(reminderDate.getDate())}T${pad(reminderDate.getHours())}${pad(reminderDate.getMinutes())}00`;
+                                const endStr = `${reminderDate.getFullYear()}${pad(reminderDate.getMonth()+1)}${pad(reminderDate.getDate())}T${pad(reminderDate.getHours())}${pad(reminderDate.getMinutes()+5)}00`;
+                                const items = [freezerFlags[day]?.meat&&"meat",freezerFlags[day]?.other&&"other freezer item"].filter(Boolean).join(" and ");
+                                const title = encodeURIComponent(`Take ${items} out of freezer for ${meal}`);
+                                const icsContent = ["BEGIN:VCALENDAR","VERSION:2.0","BEGIN:VEVENT",`DTSTART:${dtStr}`,`DTEND:${endStr}`,`SUMMARY:${decodeURIComponent(title)}`,"END:VEVENT","END:VCALENDAR"].join("\n");
+                                const blob = new Blob([icsContent],{type:"text/calendar"});
+                                const url = URL.createObjectURL(blob);
+                                const a = document.createElement("a");
+                                a.href=url; a.download="freezer-reminder.ics"; a.click();
+                                URL.revokeObjectURL(url);
+                              }}
+                              style={{marginTop:"0.3rem",padding:"0.2rem 0.6rem",borderRadius:"6px",border:"1px solid #4ade80",background:"#052e16",color:"#4ade80",cursor:"pointer",fontFamily:"inherit",fontSize:"0.72rem",display:"block"}}>
+                                🔔 Add reminder for {prevDay} 22:30
+                              </button>
+                            );
+                          })()}
                         </div>
                         <button onClick={()=>{setOverrideDay(isOverriding?null:day); setManualMealVal("");}}
                           style={{...S.editTimeBtn,color:isOverriding?"#c9a84c":"#666",borderColor:isOverriding?"#c9a84c":"#333",flexShrink:0}}>
@@ -823,20 +878,78 @@ function ShoppingItemRow({ item, onToggle, onMove, onRemove, onMarkHaveIt }) {
 
 // ── Freezer Tab ───────────────────────────────────────────────────────────
 function FreezerTab({ freezer, saveFreezer, showToast }) {
-  const [adding,setAdding]=useState(false);const [name,setName]=useState("");const [qty,setQty]=useState("1");const [unit,setUnit]=useState("portions");const [notes,setNotes]=useState("");const [editId,setEditId]=useState(null);
-  const reset=()=>{setName("");setQty("1");setUnit("portions");setNotes("");setAdding(false);setEditId(null);};
-  const submit=async()=>{if(!name.trim())return;if(editId){await saveFreezer(freezer.map(i=>i.id===editId?{...i,name:name.trim(),qty:parseInt(qty)||1,unit,notes}:i));showToast("Updated ✓");}else{await saveFreezer([...freezer,{id:Date.now().toString(),name:name.trim(),qty:parseInt(qty)||1,unit,notes,addedAt:new Date().toISOString()}]);showToast("Added ✓");}reset();};
-  const adjustQty=async(id,delta)=>{const u=freezer.map(i=>i.id!==id?i:{...i,qty:Math.max(0,i.qty+delta)}).filter(i=>i.qty>0);await saveFreezer(u);};
-  const startEdit=i=>{setEditId(i.id);setName(i.name);setQty(String(i.qty));setUnit(i.unit);setNotes(i.notes||"");setAdding(true);};
+  const [addingMeal, setAddingMeal] = useState(false);
+  const [addingIng, setAddingIng]   = useState(false);
+  const [name, setName]   = useState("");
+  const [qty, setQty]     = useState("1");
+  const [unit, setUnit]   = useState("portions");
+  const [notes, setNotes] = useState("");
+  const [ingType, setIngType] = useState("chickenBreast");
+  const [ingQty, setIngQty]   = useState("1");
+  const [ingUnit, setIngUnit] = useState("portions");
+  const [editId, setEditId]   = useState(null);
+  const [editIsIng, setEditIsIng] = useState(false);
+
+  const resetMeal = () => { setName(""); setQty("1"); setUnit("portions"); setNotes(""); setAddingMeal(false); setEditId(null); setEditIsIng(false); };
+  const resetIng  = () => { setIngType("chickenBreast"); setIngQty("1"); setIngUnit("portions"); setAddingIng(false); setEditId(null); setEditIsIng(false); };
+
+  const submitMeal = async () => {
+    if(!name.trim()) return;
+    if(editId){ await saveFreezer(freezer.map(i=>i.id===editId?{...i,name:name.trim(),qty:parseInt(qty)||1,unit,notes}:i)); showToast("Updated ✓"); }
+    else { await saveFreezer([...freezer,{id:Date.now().toString(),name:name.trim(),qty:parseInt(qty)||1,unit,notes,isIngredient:false,addedAt:new Date().toISOString()}]); showToast("Added ✓"); }
+    resetMeal();
+  };
+
+  const submitIng = async () => {
+    const typeInfo = FREEZER_INGREDIENT_TYPES.find(t=>t.key===ingType);
+    if(editId){ await saveFreezer(freezer.map(i=>i.id===editId?{...i,ingType,label:typeInfo?.label||ingType,qty:parseInt(ingQty)||1,unit:ingUnit}:i)); showToast("Updated ✓"); }
+    else { await saveFreezer([...freezer,{id:Date.now().toString(),ingType,label:typeInfo?.label||ingType,qty:parseInt(ingQty)||1,unit:ingUnit,isIngredient:true,addedAt:new Date().toISOString()}]); showToast("Added ✓"); }
+    resetIng();
+  };
+
+  const adjustQty = async (id, delta) => {
+    const u = freezer.map(i=>i.id!==id?i:{...i,qty:Math.max(0,i.qty+delta)}).filter(i=>i.qty>0);
+    await saveFreezer(u);
+  };
+
+  const startEditMeal = i => { setEditId(i.id); setName(i.name); setQty(String(i.qty)); setUnit(i.unit); setNotes(i.notes||""); setAddingMeal(true); setEditIsIng(false); };
+  const startEditIng  = i => { setEditId(i.id); setIngType(i.ingType); setIngQty(String(i.qty)); setIngUnit(i.unit||"portions"); setAddingIng(true); setEditIsIng(true); };
+
+  const meals = freezer.filter(i=>!i.isIngredient);
+  const ings  = freezer.filter(i=>i.isIngredient);
+
+  const FreezerItemCard = ({item, onEdit, onRemove}) => (
+    <div style={S.card}>
+      <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",gap:"0.75rem"}}>
+        <div style={{flex:1}}>
+          <div style={{fontWeight:"500",color:"#f5f0e8"}}>{item.label||item.name}</div>
+          {item.notes&&<div style={{fontSize:"0.8rem",color:"#888",marginTop:"0.2rem"}}>{item.notes}</div>}
+        </div>
+        <div style={{display:"flex",alignItems:"center",gap:"0.4rem",flexShrink:0}}>
+          <button onClick={()=>adjustQty(item.id,-1)} style={S.qtyBtn}>−</button>
+          <span style={{color:"#c9a84c",fontWeight:"600",minWidth:"70px",textAlign:"center",fontSize:"0.88rem"}}>{item.qty} {item.unit||"portions"}</span>
+          <button onClick={()=>adjustQty(item.id,1)} style={S.qtyBtn}>+</button>
+        </div>
+      </div>
+      <div style={{display:"flex",gap:"0.5rem",marginTop:"0.75rem"}}>
+        <button onClick={()=>onEdit(item)} style={S.editTimeBtn}>Edit</button>
+        <button onClick={()=>onRemove(item.id)} style={{...S.editTimeBtn,color:"#f87171",borderColor:"#f87171"}}>Remove</button>
+      </div>
+    </div>
+  );
+
+  const removeItem = async id => { await saveFreezer(freezer.filter(i=>i.id!==id)); showToast("Removed","#f87171"); };
+
   return (
     <div>
-      <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:"1.25rem"}}>
-        <p style={{color:"#a89f8c",margin:0,fontSize:"0.9rem"}}>{freezer.length} item{freezer.length!==1?"s":""} in freezer</p>
-        {!adding&&<button onClick={()=>setAdding(true)} style={S.primaryBtn}>+ Add Meal</button>}
+      {/* ── Batch Cooked Meals ── */}
+      <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:"0.75rem"}}>
+        <h3 style={{...S.sectionHead,margin:0}}>Batch Cooked Meals</h3>
+        {!addingMeal&&!addingIng&&<button onClick={()=>setAddingMeal(true)} style={S.primaryBtn}>+ Add Meal</button>}
       </div>
-      {adding&&(
+      {addingMeal&&(
         <div style={{...S.card,marginBottom:"1.25rem"}}>
-          <h3 style={{...S.sectionHead,marginTop:0}}>{editId?"Edit":"Add Freezer Meal"}</h3>
+          <h3 style={{...S.sectionHead,marginTop:0}}>{editId&&!editIsIng?"Edit":"Add Freezer Meal"}</h3>
           <input value={name} onChange={e=>setName(e.target.value)} placeholder="Meal name" style={S.input}/>
           <div style={{display:"flex",gap:"0.5rem",marginBottom:"0.75rem"}}>
             <input value={qty} onChange={e=>setQty(e.target.value)} type="number" min="1" style={{...S.input,width:"80px",marginBottom:0}}/>
@@ -844,29 +957,52 @@ function FreezerTab({ freezer, saveFreezer, showToast }) {
           </div>
           <input value={notes} onChange={e=>setNotes(e.target.value)} placeholder="Notes" style={S.input}/>
           <div style={{display:"flex",gap:"0.5rem"}}>
-            <button onClick={submit} style={S.primaryBtn}>{editId?"Save":"Add"}</button>
-            <button onClick={reset} style={{...S.smallBtn,background:"#333",color:"#aaa"}}>Cancel</button>
+            <button onClick={submitMeal} style={S.primaryBtn}>{editId&&!editIsIng?"Save":"Add"}</button>
+            <button onClick={resetMeal} style={{...S.smallBtn,background:"#333",color:"#aaa"}}>Cancel</button>
           </div>
         </div>
       )}
-      {freezer.length===0&&!adding?(<div style={S.emptyState}><span style={{fontSize:"2rem"}}>🧊</span><p>Freezer is empty.</p></div>):(
-        <div style={{display:"flex",flexDirection:"column",gap:"0.65rem"}}>
-          {freezer.map(item=>(
-            <div key={item.id} style={S.card}>
-              <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",gap:"0.75rem"}}>
-                <div style={{flex:1}}><div style={{fontWeight:"500",color:"#f5f0e8"}}>{item.name}</div>{item.notes&&<div style={{fontSize:"0.8rem",color:"#888",marginTop:"0.2rem"}}>{item.notes}</div>}</div>
-                <div style={{display:"flex",alignItems:"center",gap:"0.4rem",flexShrink:0}}>
-                  <button onClick={()=>adjustQty(item.id,-1)} style={S.qtyBtn}>−</button>
-                  <span style={{color:"#c9a84c",fontWeight:"600",minWidth:"70px",textAlign:"center",fontSize:"0.88rem"}}>{item.qty} {item.unit}</span>
-                  <button onClick={()=>adjustQty(item.id,1)} style={S.qtyBtn}>+</button>
-                </div>
-              </div>
-              <div style={{display:"flex",gap:"0.5rem",marginTop:"0.75rem"}}>
-                <button onClick={()=>startEdit(item)} style={S.editTimeBtn}>Edit</button>
-                <button onClick={async()=>{await saveFreezer(freezer.filter(i=>i.id!==item.id));showToast("Removed","#f87171");}} style={{...S.editTimeBtn,color:"#f87171",borderColor:"#f87171"}}>Remove</button>
-              </div>
+      {meals.length===0&&!addingMeal?(
+        <div style={{...S.emptyState,padding:"1rem",marginBottom:"1.5rem"}}><p style={{margin:0,fontSize:"0.9rem"}}>No batch cooked meals.</p></div>
+      ):(
+        <div style={{display:"flex",flexDirection:"column",gap:"0.65rem",marginBottom:"1.5rem"}}>
+          {meals.map(item=><FreezerItemCard key={item.id} item={item} onEdit={startEditMeal} onRemove={removeItem}/>)}
+        </div>
+      )}
+
+      {/* ── Freezer Ingredients ── */}
+      <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:"0.75rem"}}>
+        <h3 style={{...S.sectionHead,margin:0}}>Freezer Ingredients</h3>
+        {!addingMeal&&!addingIng&&<button onClick={()=>setAddingIng(true)} style={S.primaryBtn}>+ Add Ingredient</button>}
+      </div>
+      {addingIng&&(
+        <div style={{...S.card,marginBottom:"1.25rem"}}>
+          <h3 style={{...S.sectionHead,marginTop:0}}>{editId&&editIsIng?"Edit":"Add Freezer Ingredient"}</h3>
+          <label style={{color:"#a89f8c",fontSize:"0.78rem",letterSpacing:"0.08em",textTransform:"uppercase",display:"block",marginBottom:"0.3rem"}}>Type</label>
+          <select value={ingType} onChange={e=>setIngType(e.target.value)} style={S.input}>
+            {FREEZER_INGREDIENT_TYPES.map(t=><option key={t.key} value={t.key}>{t.label}</option>)}
+          </select>
+          <div style={{display:"flex",gap:"0.5rem",marginBottom:"0.75rem"}}>
+            <div style={{flex:1}}>
+              <label style={{color:"#a89f8c",fontSize:"0.78rem",letterSpacing:"0.08em",textTransform:"uppercase",display:"block",marginBottom:"0.3rem"}}>Quantity</label>
+              <input value={ingQty} onChange={e=>setIngQty(e.target.value)} type="number" min="1" style={{...S.input,marginBottom:0}}/>
             </div>
-          ))}
+            <div style={{flex:1}}>
+              <label style={{color:"#a89f8c",fontSize:"0.78rem",letterSpacing:"0.08em",textTransform:"uppercase",display:"block",marginBottom:"0.3rem"}}>Unit</label>
+              <select value={ingUnit} onChange={e=>setIngUnit(e.target.value)} style={{...S.input,marginBottom:0}}>{["portions","bags","pieces","packs"].map(u=><option key={u}>{u}</option>)}</select>
+            </div>
+          </div>
+          <div style={{display:"flex",gap:"0.5rem"}}>
+            <button onClick={submitIng} style={S.primaryBtn}>{editId&&editIsIng?"Save":"Add"}</button>
+            <button onClick={resetIng} style={{...S.smallBtn,background:"#333",color:"#aaa"}}>Cancel</button>
+          </div>
+        </div>
+      )}
+      {ings.length===0&&!addingIng?(
+        <div style={{...S.emptyState,padding:"1rem"}}><p style={{margin:0,fontSize:"0.9rem"}}>No freezer ingredients added.</p></div>
+      ):(
+        <div style={{display:"flex",flexDirection:"column",gap:"0.65rem"}}>
+          {ings.map(item=><FreezerItemCard key={item.id} item={item} onEdit={startEditIng} onRemove={removeItem}/>)}
         </div>
       )}
     </div>
@@ -934,7 +1070,23 @@ function RecipesTab({ recipes, saveRecipes, family, showToast }) {
   const [newIngVal, setNewIngVal]       = useState("");
 
   const CARB_LABELS = { none:"No main carb", pasta:"🍝 Pasta", rice:"🍚 Rice", bread:"🍞 Bread", potato:"🥔 Potato", other:"Other" };
-  const MEAT_LABELS = { none:"None", chicken:"Chicken", porkMince:"Pork Mince", sausages:"Sausages", prawns:"Prawns", turkeyMince:"Turkey Mince", beef:"Beef", pork:"Pork", lamb:"Lamb", fish:"Fish", bacon:"Bacon" };
+  const FREEZER_INGREDIENT_TYPES = [
+  { key:"chickenBreast", label:"Chicken Breast", isMeat:true },
+  { key:"chickenThigh",  label:"Chicken Thigh",  isMeat:true },
+  { key:"porkMince",     label:"Pork Mince",     isMeat:true },
+  { key:"sausages",      label:"Sausages",       isMeat:true },
+  { key:"prawns",        label:"Prawns",         isMeat:true },
+  { key:"turkeyMince",   label:"Turkey Mince",   isMeat:true },
+  { key:"beef",          label:"Beef",           isMeat:true },
+  { key:"pork",          label:"Pork",           isMeat:true },
+  { key:"lamb",          label:"Lamb",           isMeat:true },
+  { key:"fish",          label:"Fish",           isMeat:true },
+  { key:"bacon",         label:"Bacon",          isMeat:true },
+  { key:"burgerBuns",    label:"Burger Buns",    isMeat:false },
+  { key:"hotDogBuns",    label:"Hot Dog Buns",   isMeat:false },
+  { key:"other",         label:"Other",          isMeat:false },
+];
+const MEAT_LABELS = { none:"None", chicken:"Chicken", porkMince:"Pork Mince", sausages:"Sausages", prawns:"Prawns", turkeyMince:"Turkey Mince", beef:"Beef", pork:"Pork", lamb:"Lamb", fish:"Fish", bacon:"Bacon" };
 
   const processRecipe = async (source, imageBase64=null, mediaType=null) => {
     setProcessing(true); setApiError("");
@@ -1316,6 +1468,7 @@ function SettingsTab({ prefs, savePrefs, weekStart, saveWeekStart, itemPrefs, sa
           ["mondayPrawns","Use frozen prawns on a Monday","🦐"],
           ["prioritiseMissedMeals","If someone isn't eating, prioritise meals they can't eat that night","👤"],
           ["fridayTakeaway","Plan Friday as Takeaway night","🍕"],
+          ["useFreezerIngredients","Try to plan a meal using freezer ingredients (meat/buns)","🧊"],
         ].map(([k,label,icon])=>(
           <div key={k} onClick={()=>toggle(k)} style={{cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"space-between",padding:"0.6rem 0",borderBottom:"1px solid #1e1e1e"}}>
             <div style={{display:"flex",alignItems:"center",gap:"0.65rem",flex:1,paddingRight:"0.75rem"}}>
