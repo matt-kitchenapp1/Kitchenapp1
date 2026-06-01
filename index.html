@@ -262,6 +262,8 @@ function PlannerTab({ recipes, family, prefs, freezer, freezerIngredients, showT
   const [overrideDay, setOverrideDay]     = useState(null);
   const [overrideUpdating, setOverrideUpdating] = useState(false);
   const [manualMealVal, setManualMealVal] = useState("");
+  // lockedMeals: { Monday: "Specific meal name", ... } — set before generation
+  const [lockedMeals, setLockedMeals] = useState(planData.lockedMeals||{});
   // freezerFlags: { Monday: { meat: false, other: false }, ... }
   const [freezerFlags, setFreezerFlags] = useState(planData.freezerFlags||{});
   // extraPeople: { Monday: 0, Tuesday: 2, … } — additional guests beyond the household
@@ -274,8 +276,19 @@ function PlannerTab({ recipes, family, prefs, freezer, freezerIngredients, showT
     setLocalPlan(planData.plan||{});
     setExtraPeople(planData.extraPeople||{});
     setFreezerFlags(planData.freezerFlags||{});
+    setLockedMeals(planData.lockedMeals||{});
     setStep(Object.keys(planData.plan||{}).length>0?"plan":"schedule");
   },[planData]);
+
+  // Auto-save schedule inputs 0.8s after the user stops making changes
+  useEffect(()=>{
+    const hasData = Object.keys(localSchedule).length>0||Object.keys(localSchool).length>0||Object.keys(lockedMeals).length>0||Object.values(extraPeople).some(v=>v>0);
+    if (!hasData) return;
+    const timer = setTimeout(async()=>{
+      await savePlan({ plan:localPlan, schedule:localSchedule, diners:localDiners, schoolMeals:localSchool, extraPeople, freezerFlags, lockedMeals });
+    }, 800);
+    return ()=>clearTimeout(timer);
+  },[localSchedule, localDiners, localSchool, lockedMeals, extraPeople]);
 
   const toggleDiner = (day,mid) => setLocalDiners(p=>{ const cur=p[day]||[]; return {...p,[day]:cur.includes(mid)?cur.filter(x=>x!==mid):[...cur,mid]}; });
 
@@ -323,7 +336,7 @@ function PlannerTab({ recipes, family, prefs, freezer, freezerIngredients, showT
     setLocalPlan(newPlan);
     setOverrideDay(null);
     setManualMealVal("");
-    const newPlanData = { plan:newPlan, schedule:localSchedule, diners:localDiners, schoolMeals:localSchool, extraPeople, freezerFlags };
+    const newPlanData = { plan:newPlan, schedule:localSchedule, diners:localDiners, schoolMeals:localSchool, extraPeople, freezerFlags, lockedMeals };
     await savePlan(newPlanData);
     await rebuildShopping(newPlan);
     showToast("Meal updated & shopping list refreshed ✓");
@@ -384,7 +397,8 @@ function PlannerTab({ recipes, family, prefs, freezer, freezerIngredients, showT
         const names = d.eligible.map(r=>`  - ${r.name} (${r.cookTime}min, carb:${r.mainCarb||"none"}, meat:${r.mainMeat||"none"})`).join("\n");
         const eatingNames = d.eating.map(id=>family.find(m=>m.id===id)?.name||id).join(", ");
         const schoolNote = d.schoolMeal?`  School lunch: "${d.schoolMeal}"`:"";
-        return `${d.day} [UP TO ${d.maxTime}min — any shorter meal is fine too, eating:${eatingNames}]:\n${schoolNote}\n${names||"  (no suitable recipes)"}`;
+        const locked = lockedMeals[d.day]?`  *** LOCKED MEAL: "${lockedMeals[d.day]}" — do not change this day ***`:"";
+        return `${d.day} [UP TO ${d.maxTime}min — any shorter meal is fine too, eating:${eatingNames}]:\n${locked}\n${schoolNote}\n${names||"  (no suitable recipes)"}`;
       }).join("\n\n");
       const dayKeys = DAYS.map(d=>d.toLowerCase());
       const system = `You are a meal planner. Return ONLY valid JSON, no markdown:\n{${dayKeys.map(d=>`"${d}":"recipe name"`).join(",")}}\nRules:\n${allRules}\n- Only use eligible recipes per day\n- The time shown per day is a MAXIMUM — shorter meals are always acceptable\n- Vary meals across week; prefer variety in cook times too\n- Freezer meals ok (prefix "🧊 ")\n- Use "—" if nothing fits`;
@@ -392,11 +406,13 @@ function PlannerTab({ recipes, family, prefs, freezer, freezerIngredients, showT
       const plan = JSON.parse(raw.replace(/```json|```/g,"").trim());
       const normalised = {};
       DAYS.forEach(d=>{ normalised[d]=plan[d.toLowerCase()]||plan[d]||"—"; });
+      // Apply locked meals — override whatever Claude chose
+      DAYS.forEach(d=>{ if(lockedMeals[d]&&lockedMeals[d].trim()) normalised[d]=lockedMeals[d].trim(); });
       // For the upcoming plan, record current week's meals so next generation can avoid repeats
       const previousWeekMeals = !isCurrentWeek
         ? [] // upcoming plan doesn't need to track its own prev week here; that comes from current
         : Object.values(normalised).filter(n=>n&&n!=="—"&&!n.startsWith("🧊"));
-      const newPlanData = { plan:normalised, schedule:localSchedule, diners:localDiners, schoolMeals:localSchool, previousWeekMeals, extraPeople, freezerFlags };
+      const newPlanData = { plan:normalised, schedule:localSchedule, diners:localDiners, schoolMeals:localSchool, previousWeekMeals, extraPeople, freezerFlags, lockedMeals };
       await savePlan(newPlanData);
       setLocalPlan(normalised);
       await rebuildShopping(normalised);
@@ -459,7 +475,7 @@ function PlannerTab({ recipes, family, prefs, freezer, freezerIngredients, showT
                     const maxTime = Math.max(...selected.map(s=>TIME_SLOTS.find(t=>t.label===s)?.max||30));
                     return <p style={{fontSize:"0.72rem",color:"#666",margin:"0 0 0.6rem"}}>Any meal up to {maxTime} min</p>;
                   })()}
-                  <div style={{display:"flex",gap:"0.4rem",flexWrap:"wrap",alignItems:"center",marginBottom:isWeekday?"0.7rem":"0"}}>
+                  <div style={{display:"flex",gap:"0.4rem",flexWrap:"wrap",alignItems:"center",marginBottom:"0.5rem"}}>
                     <span style={{fontSize:"0.75rem",color:"#666",marginRight:"0.25rem"}}>Eating:</span>
                     {family.map(m=>{ const on=eating.includes(m.id); return (
                       <button key={m.id} onClick={()=>toggleDiner(day,m.id)}
@@ -467,15 +483,30 @@ function PlannerTab({ recipes, family, prefs, freezer, freezerIngredients, showT
                         {m.emoji} {m.name}
                       </button>
                     );})}
+                    <div style={{display:"flex",alignItems:"center",gap:"0.3rem",marginLeft:"0.25rem"}}>
+                      <span style={{fontSize:"0.75rem",color:"#666"}}>+Guests:</span>
+                      <select value={extraPeople[day]||0} onChange={async e=>{await setDayExtraPeople(day,parseInt(e.target.value));}}
+                        style={{background:"#222",border:"1px solid #333",borderRadius:"6px",color:"#f5f0e8",fontFamily:"inherit",fontSize:"0.8rem",padding:"0.2rem 0.4rem"}}>
+                        {Array.from({length:16},(_,i)=>i).map(n=><option key={n} value={n}>{n}</option>)}
+                      </select>
+                    </div>
                   </div>
                   {isWeekday&&(
-                    <div style={{display:"flex",alignItems:"center",gap:"0.5rem"}}>
+                    <div style={{display:"flex",alignItems:"center",gap:"0.5rem",marginBottom:"0.5rem"}}>
                       <span style={{fontSize:"0.75rem",color:"#666",whiteSpace:"nowrap"}}>🏫 School:</span>
                       <input value={localSchool[day]||""} onChange={e=>setLocalSchool(p=>({...p,[day]:e.target.value}))}
                         placeholder="e.g. pasta, pizza…"
                         style={{...S.input,marginBottom:0,flex:1,fontSize:"0.85rem",padding:"0.35rem 0.65rem"}}/>
                     </div>
                   )}
+                  {/* Pre-lock a specific meal for this day */}
+                  <div style={{display:"flex",alignItems:"center",gap:"0.5rem"}}>
+                    <span style={{fontSize:"0.75rem",color:"#666",whiteSpace:"nowrap"}}>🔒 Lock meal:</span>
+                    <input value={lockedMeals[day]||""} onChange={e=>setLockedMeals(p=>({...p,[day]:e.target.value}))}
+                      placeholder="e.g. Spaghetti Bolognese (optional)"
+                      style={{...S.input,marginBottom:0,flex:1,fontSize:"0.85rem",padding:"0.35rem 0.65rem",borderColor:lockedMeals[day]?"#c9a84c":"#333"}}/>
+                    {lockedMeals[day]&&<button onClick={()=>setLockedMeals(p=>({...p,[day]:""}))} style={{background:"transparent",border:"none",color:"#f87171",cursor:"pointer",fontSize:"1rem",flexShrink:0}}>×</button>}
+                  </div>
                 </div>
               );
             })}
@@ -526,7 +557,10 @@ function PlannerTab({ recipes, family, prefs, freezer, freezerIngredients, showT
                           </div>
                         </div>
                         <div style={{flex:1}}>
-                          <div style={{color:meal&&meal!=="—"?"#f5f0e8":"#555",fontSize:"0.95rem"}}>{meal||"—"}</div>
+                          <div style={{display:"flex",alignItems:"center",gap:"0.4rem"}}>
+                            <div style={{color:meal&&meal!=="—"?"#f5f0e8":"#555",fontSize:"0.95rem"}}>{meal||"—"}</div>
+                            {lockedMeals[day]&&<span style={{fontSize:"0.65rem",color:"#c9a84c",background:"#2d2000",padding:"0.1rem 0.35rem",borderRadius:"4px",flexShrink:0}}>🔒 locked</span>}
+                          </div>
                           {school&&<div style={{fontSize:"0.72rem",color:"#666",marginTop:"0.2rem"}}>🏫 {school}</div>}
                           {/* Freezer checkboxes */}
                           <div style={{display:"flex",gap:"0.5rem",marginTop:"0.3rem",flexWrap:"wrap"}}>
@@ -590,7 +624,7 @@ function PlannerTab({ recipes, family, prefs, freezer, freezerIngredients, showT
                           {/* Extra people */}
                           <div style={{display:"flex",alignItems:"center",gap:"0.6rem",marginBottom:"0.85rem",flexWrap:"wrap"}}>
                             <span style={{fontSize:"0.8rem",color:"#a89f8c"}}>👤 Extra guests:</span>
-                            {[0,1,2,3,4,5,6].map(n=>(
+                            {[0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15].map(n=>(
                               <button key={n} onClick={()=>setDayExtraPeople(day,n)}
                                 style={{width:"28px",height:"28px",borderRadius:"6px",border:"1px solid",borderColor:(extraPeople[day]||0)===n?"#60a5fa":"#333",background:(extraPeople[day]||0)===n?"#1a2a3a":"transparent",color:(extraPeople[day]||0)===n?"#60a5fa":"#666",cursor:"pointer",fontFamily:"inherit",fontSize:"0.82rem",fontWeight:(extraPeople[day]||0)===n?"600":"400"}}>
                                 {n}
