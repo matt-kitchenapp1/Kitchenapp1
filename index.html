@@ -502,9 +502,12 @@ function PlannerTab({ recipes, family, prefs, freezer, freezerIngredients, showT
                   {/* Pre-lock a specific meal for this day */}
                   <div style={{display:"flex",alignItems:"center",gap:"0.5rem"}}>
                     <span style={{fontSize:"0.75rem",color:"#666",whiteSpace:"nowrap"}}>🔒 Lock meal:</span>
-                    <input value={lockedMeals[day]||""} onChange={e=>setLockedMeals(p=>({...p,[day]:e.target.value}))}
-                      placeholder="e.g. Spaghetti Bolognese (optional)"
-                      style={{...S.input,marginBottom:0,flex:1,fontSize:"0.85rem",padding:"0.35rem 0.65rem",borderColor:lockedMeals[day]?"#c9a84c":"#333"}}/>
+                    <select value={lockedMeals[day]||""} onChange={e=>setLockedMeals(p=>({...p,[day]:e.target.value}))}
+                      style={{...S.input,marginBottom:0,flex:1,fontSize:"0.85rem",padding:"0.35rem 0.65rem",borderColor:lockedMeals[day]?"#c9a84c":"#333"}}>
+                      <option value="">— Let Claude choose —</option>
+                      <option value="Takeaway">🍕 Takeaway</option>
+                      {recipes.map(r=><option key={r.id} value={r.name}>{r.name}</option>)}
+                    </select>
                     {lockedMeals[day]&&<button onClick={()=>setLockedMeals(p=>({...p,[day]:""}))} style={{background:"transparent",border:"none",color:"#f87171",cursor:"pointer",fontSize:"1rem",flexShrink:0}}>×</button>}
                   </div>
                 </div>
