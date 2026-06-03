@@ -37,16 +37,48 @@ const PANTRY_KEY       = "recipePlanner_pantry";
 const CATEGORIES_KEY   = "recipePlanner_categories";
 const API_KEY_KEY      = "recipePlanner_apiKey";
 
-// ── localStorage helpers (replaces window.storage) ───────────────────────
+// ── Supabase storage layer ────────────────────────────────────────────────
+const SUPABASE_URL = "https://qimiwhpgceocbcnulbkj.supabase.co";
+const SUPABASE_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InFpbWl3aHBnY2VvY2JjbnVsYmtqIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODA1MTYzNTQsImV4cCI6MjA5NjA5MjM1NH0.Mour7vSRofUKUcCEOuh8rx2ripmKK7aQBEmIx-U4dTs";
+const USER_ID = "family"; // shared across all family devices
+
+async function sbGet(key) {
+  try {
+    const res = await fetch(`${SUPABASE_URL}/rest/v1/kitchen_data?user_id=eq.${USER_ID}&data_type=eq.${key}&select=data`, {
+      headers: { "apikey": SUPABASE_KEY, "Authorization": `Bearer ${SUPABASE_KEY}` }
+    });
+    const rows = await res.json();
+    if (rows && rows.length > 0) return { value: JSON.stringify(rows[0].data) };
+    return null;
+  } catch { return null; }
+}
+
+async function sbSet(key, value) {
+  try {
+    const parsed = JSON.parse(value);
+    await fetch(`${SUPABASE_URL}/rest/v1/kitchen_data`, {
+      method: "POST",
+      headers: {
+        "apikey": SUPABASE_KEY,
+        "Authorization": `Bearer ${SUPABASE_KEY}`,
+        "Content-Type": "application/json",
+        "Prefer": "resolution=merge-duplicates"
+      },
+      body: JSON.stringify({ id: `${USER_ID}_${key}`, user_id: USER_ID, data_type: key, data: parsed, updated_at: new Date().toISOString() })
+    });
+    return true;
+  } catch { return null; }
+}
+
 const storage = {
-  get: (key) => {
-    try { const v = localStorage.getItem(key); return v ? { value: v } : null; }
-    catch { return null; }
-  },
-  set: (key, value) => {
-    try { localStorage.setItem(key, value); return true; }
-    catch { return null; }
-  },
+  get: sbGet,
+  set: async (key, value) => { await sbSet(key, value); return true; },
+};
+
+// Also keep localStorage as fallback cache for speed
+const localCache = {
+  get: (key) => { try { const v = localStorage.getItem(key); return v ? { value: v } : null; } catch { return null; } },
+  set: (key, value) => { try { localStorage.setItem(key, value); } catch {} },
 };
 
 
@@ -111,8 +143,15 @@ async function callClaude(system, user, imageBase64=null, mediaType=null) {
   return data.content?.map(b=>b.text||"").join("")||"";
 }
 
+// ── Password protection ───────────────────────────────────────────────────
+const APP_PASSWORD = "Re@llyc00lk1tchen@pp"; // Change this to your preferred password
+const AUTH_KEY = "kitchenApp_authed";
+
 // ── Root ──────────────────────────────────────────────────────────────────
 function App() {
+  const [authed, setAuthed]         = useState(()=>localStorage.getItem(AUTH_KEY)==="true");
+  const [pwInput, setPwInput]       = useState("");
+  const [pwError, setPwError]       = useState(false);
   const [tab, setTab]               = useState("current");
   const [recipes, setRecipes]       = useState([]);
   const [currentPlan, setCurrentPlan]   = useState({ plan:{}, schedule:{}, diners:{}, schoolMeals:{} });
@@ -133,7 +172,15 @@ function App() {
 
   useEffect(() => {
     async function load() {
-      const tryGet = async key => { try { const r = storage.get(key); return r ? JSON.parse(r.value) : null; } catch { return null; } };
+      const tryGet = async key => {
+        try {
+          const cached = localCache.get(key);
+          if (cached) { storage.get(key).then(r => { if(r) localCache.set(key, r.value); }); return JSON.parse(cached.value); }
+          const r = await storage.get(key);
+          if (r) { localCache.set(key, r.value); return JSON.parse(r.value); }
+          return null;
+        } catch { return null; }
+      };
       const r  = await tryGet(RECIPES_KEY);      if (r)  setRecipes(r);
       const f  = await tryGet(FAMILY_KEY);       if (f)  setFamily(f);
       const fr = await tryGet(FREEZER_KEY);      if (fr) setFreezer(fr);
@@ -152,7 +199,7 @@ function App() {
     load();
   }, []);
 
-  const persist     = async (key, val) => { storage.set(key, JSON.stringify(val)); };
+  const persist     = async (key, val) => { await storage.set(key, JSON.stringify(val)); localCache.set(key, JSON.stringify(val)); };
   const saveRecipes    = async u => { setRecipes(u);    await persist(RECIPES_KEY,u); };
   const saveShopping   = async u => { setShopping(u);   await persist(SHOPPING_KEY,u); };
   const saveFavourites = async u => { setFavourites(u); await persist(FAVOURITES_KEY,u); };
@@ -184,6 +231,24 @@ function App() {
     if (!pantry.length) return items;
     return items.filter(item => !pantry.some(p => item.text.toLowerCase().includes(p.text.toLowerCase()) || p.text.toLowerCase().includes(item.text.toLowerCase())));
   };
+
+  // Password screen
+  if (!authed) return (
+    <div style={{...S.loadingScreen, flexDirection:"column", padding:"2rem"}}>
+      <link href="https://fonts.googleapis.com/css2?family=Playfair+Display:ital,wght@0,400;0,700&family=DM+Sans:wght@300;400;500&display=swap" rel="stylesheet"/>
+      <h1 style={{fontFamily:"'Playfair Display',serif", color:"#f5f0e8", fontSize:"2rem", fontWeight:"400", marginBottom:"0.5rem"}}>My Kitchen</h1>
+      <p style={{color:"#a89f8c", marginBottom:"2rem", fontSize:"0.9rem"}}>Enter your password to continue</p>
+      <div style={{width:"100%", maxWidth:"320px", display:"flex", flexDirection:"column", gap:"0.75rem"}}>
+        <input type="password" value={pwInput} onChange={e=>{ setPwInput(e.target.value); setPwError(false); }}
+          onKeyDown={e=>{ if(e.key==="Enter"){ if(pwInput===APP_PASSWORD){ localStorage.setItem(AUTH_KEY,"true"); setAuthed(true); } else { setPwError(true); setPwInput(""); }}}}
+          placeholder="Password" autoFocus
+          style={{...S.input, marginBottom:0, fontSize:"1rem", textAlign:"center", letterSpacing:"0.2em"}}/>
+        {pwError && <p style={{color:"#f87171", textAlign:"center", fontSize:"0.85rem", margin:0}}>Incorrect password. Try again.</p>}
+        <button onClick={()=>{ if(pwInput===APP_PASSWORD){ localStorage.setItem(AUTH_KEY,"true"); setAuthed(true); } else { setPwError(true); setPwInput(""); }}}
+          style={{...S.primaryBtn, fontSize:"1rem", padding:"0.75rem"}}>Enter</button>
+      </div>
+    </div>
+  );
 
   if (loading) return (
     <div style={S.loadingScreen}><div style={S.spinner}/><p style={{color:"#a89f8c",marginTop:"1rem",fontFamily:"Georgia,serif"}}>Loading your kitchen…</p></div>
@@ -368,9 +433,10 @@ function PlannerTab({ recipes, family, prefs, freezer, freezerIngredients, showT
         const slots = Array.isArray(rawSlots) ? rawSlots : (rawSlots ? [rawSlots] : []);
         const maxTime = slots.length>0 ? Math.max(...slots.map(s=>TIME_SLOTS.find(t=>t.label===s)?.max||30)) : 120;
         const eating  = localDiners[day]||family.map(m=>m.id);
-        const eligible= recipes.filter(r=>eating.every(mid=>(r.suitability?.[mid]||"yes")!=="no"));
+        const nobodyEating = eating.length===0;
+        const eligible= nobodyEating ? [] : recipes.filter(r=>eating.every(mid=>(r.suitability?.[mid]||"yes")!=="no"));
         const schoolMeal = WEEKDAYS.includes(day)?(localSchool[day]||""):"";
-        return { day, slots, maxTime, eating, eligible, schoolMeal };
+        return { day, slots, maxTime, eating, nobodyEating, eligible, schoolMeal };
       });
       const freezerStr = freezer.length>0?`\nFreezer available: ${freezer.map(f=>`${f.name} (${f.qty} ${f.unit})`).join(", ")}\n`:"";
       // Previous week meals — passed in via planData.previousWeekMeals if available
@@ -397,7 +463,9 @@ function PlannerTab({ recipes, family, prefs, freezer, freezerIngredients, showT
         const names = d.eligible.map(r=>`  - ${r.name} (${r.cookTime}min, carb:${r.mainCarb||"none"}, meat:${r.mainMeat||"none"})`).join("\n");
         const eatingNames = d.eating.map(id=>family.find(m=>m.id===id)?.name||id).join(", ");
         const schoolNote = d.schoolMeal?`  School lunch: "${d.schoolMeal}"`:"";
-        const locked = lockedMeals[d.day]?`  *** LOCKED MEAL: "${lockedMeals[d.day]}" — do not change this day ***`:"";
+        const locked = d.nobodyEating
+          ? `  *** NOBODY EATING — assign "—" to this day, no meal needed ***`
+          : lockedMeals[d.day]?`  *** LOCKED MEAL: "${lockedMeals[d.day]}" — do not change this day ***`:"";
         return `${d.day} [UP TO ${d.maxTime}min — any shorter meal is fine too, eating:${eatingNames}]:\n${locked}\n${schoolNote}\n${names||"  (no suitable recipes)"}`;
       }).join("\n\n");
       const dayKeys = DAYS.map(d=>d.toLowerCase());
@@ -406,8 +474,12 @@ function PlannerTab({ recipes, family, prefs, freezer, freezerIngredients, showT
       const plan = JSON.parse(raw.replace(/```json|```/g,"").trim());
       const normalised = {};
       DAYS.forEach(d=>{ normalised[d]=plan[d.toLowerCase()]||plan[d]||"—"; });
-      // Apply locked meals — override whatever Claude chose
-      DAYS.forEach(d=>{ if(lockedMeals[d]&&lockedMeals[d].trim()) normalised[d]=lockedMeals[d].trim(); });
+      // Apply locked meals and nobody-eating days
+      DAYS.forEach(d=>{
+        const eating = localDiners[d]||family.map(m=>m.id);
+        if (eating.length===0) { normalised[d]="—"; }
+        else if (lockedMeals[d]&&lockedMeals[d].trim()) { normalised[d]=lockedMeals[d].trim(); }
+      });
       // For the upcoming plan, record current week's meals so next generation can avoid repeats
       const previousWeekMeals = !isCurrentWeek
         ? [] // upcoming plan doesn't need to track its own prev week here; that comes from current
