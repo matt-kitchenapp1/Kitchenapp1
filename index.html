@@ -1690,6 +1690,42 @@ function SettingsTab({ prefs, savePrefs, weekStart, saveWeekStart, itemPrefs, sa
       </div>
 
       <button onClick={save} style={S.primaryBtn}>Save Settings</button>
+
+      {/* Export / Import */}
+      <div style={{...S.card, marginTop:"1rem"}}>
+        <label style={{color:"#a89f8c",fontSize:"0.82rem",letterSpacing:"0.08em",textTransform:"uppercase",display:"block",marginBottom:"0.5rem"}}>📦 Data Export / Import</label>
+        <p style={{color:"#666",fontSize:"0.8rem",margin:"0 0 0.75rem"}}>Export all your data from this device to transfer to another device or after switching to the online database.</p>
+        <div style={{display:"flex",gap:"0.5rem",flexWrap:"wrap"}}>
+          <button onClick={()=>{
+            const keys=["recipePlanner_recipes","recipePlanner_currentPlan","recipePlanner_upcomingPlan","recipePlanner_shopping","recipePlanner_family","recipePlanner_freezer","recipePlanner_prefs","recipePlanner_favourites","recipePlanner_itemPrefs","recipePlanner_weekStart","recipePlanner_pantry","recipePlanner_categories"];
+            const data={};
+            keys.forEach(k=>{ const v=localStorage.getItem(k); if(v) data[k]=JSON.parse(v); });
+            const blob=new Blob([JSON.stringify(data,null,2)],{type:"application/json"});
+            const url=URL.createObjectURL(blob);
+            const a=document.createElement("a");
+            a.href=url; a.download="my-kitchen-backup.json"; a.click();
+            URL.revokeObjectURL(url);
+          }} style={S.primaryBtn}>Export Data</button>
+
+          <label style={{...S.primaryBtn, background:"#1a2e1a", color:"#4ade80", border:"1px solid #4ade80", cursor:"pointer", display:"inline-flex", alignItems:"center"}}>
+            Import Data
+            <input type="file" accept=".json" style={{display:"none"}} onChange={async e=>{
+              const file=e.target.files?.[0]; if(!file) return;
+              const reader=new FileReader();
+              reader.onload=async evt=>{
+                try {
+                  const data=JSON.parse(evt.target.result);
+                  Object.entries(data).forEach(([k,v])=>localStorage.setItem(k,JSON.stringify(v)));
+                  for (const [k,v] of Object.entries(data)) { await persist(k,v); }
+                  showToast("Imported! Reloading...");
+                  setTimeout(()=>window.location.reload(),1500);
+                } catch { showToast("Import failed","#f87171"); }
+              };
+              reader.readAsText(file);
+            }}/>
+          </label>
+        </div>
+      </div>
     </div>
   );
 }
