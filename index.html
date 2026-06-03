@@ -1715,11 +1715,28 @@ function SettingsTab({ prefs, savePrefs, weekStart, saveWeekStart, itemPrefs, sa
               reader.onload=async evt=>{
                 try {
                   const data=JSON.parse(evt.target.result);
-                  Object.entries(data).forEach(([k,v])=>localStorage.setItem(k,JSON.stringify(v)));
-                  for (const [k,v] of Object.entries(data)) { await persist(k,v); }
-                  showToast("Imported! Reloading...");
+                  if (!data || typeof data !== "object") throw new Error("Invalid file");
+                  // Save everything to localStorage first
+                  Object.entries(data).forEach(([k,v])=>{
+                    try { localStorage.setItem(k, typeof v==="string"?v:JSON.stringify(v)); } catch(e){}
+                  });
+                  showToast("Data imported! Saving to database...");
+                  // Now push each key to Supabase directly
+                  const SURL = "https://qimiwhpgceocbcnulbkj.supabase.co";
+                  const SKEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InFpbWl3aHBnY2VvY2JjbnVsYmtqIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODA1MTYzNTQsImV4cCI6MjA5NjA5MjM1NH0.Mour7vSRofUKUcCEOuh8rx2ripmKK7aQBEmIx-U4dTs";
+                  const USER = "family";
+                  for (const [k,v] of Object.entries(data)) {
+                    try {
+                      await fetch(`${SURL}/rest/v1/kitchen_data`, {
+                        method:"POST",
+                        headers:{"apikey":SKEY,"Authorization":`Bearer ${SKEY}`,"Content-Type":"application/json","Prefer":"resolution=merge-duplicates"},
+                        body:JSON.stringify({id:`${USER}_${k}`,user_id:USER,data_type:k,data:v,updated_at:new Date().toISOString()})
+                      });
+                    } catch(e){}
+                  }
+                  showToast("All done! Reloading...");
                   setTimeout(()=>window.location.reload(),1500);
-                } catch { showToast("Import failed","#f87171"); }
+                } catch(err) { showToast("Import failed: "+err.message,"#f87171"); }
               };
               reader.readAsText(file);
             }}/>
