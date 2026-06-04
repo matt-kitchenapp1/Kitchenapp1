@@ -347,7 +347,7 @@ function App() {
             onPromoteToCurrentWeek={async()=>{ await saveCurrentPlan(upcomingPlan); await saveUpcomingPlan({plan:{},schedule:{},diners:{},schoolMeals:{}}); setTab("current"); showToast("Moved to This Week ✓"); }}/>}
         {tab==="recipes"  && <RecipesTab recipes={recipes} saveRecipes={saveRecipes} family={family} showToast={showToast}/>}
         {tab==="shopping" && <ShoppingTab shopping={shopping} saveShopping={saveShopping} favourites={favourites} saveFavourites={saveFavourites} itemPrefs={itemPrefs} learnItemPref={learnItemPref} classifyItem={classifyItem} pantry={pantry} savePantry={savePantry} categories={categories} showToast={showToast}/>}
-        {tab==="freezer"  && <FreezerTab freezer={freezer} saveFreezer={saveFreezer} showToast={showToast}/>}
+        {tab==="freezer"  && <FreezerTab freezer={freezer} saveFreezer={saveFreezer} showToast={showToast} recipes={recipes}/>}
         {tab==="family"   && <FamilyTab family={family} saveFamily={saveFamily} showToast={showToast}/>}
         {tab==="prefs"    && <SettingsTab prefs={prefs} savePrefs={savePrefs} weekStart={weekStart} saveWeekStart={saveWeekStart} itemPrefs={itemPrefs} saveItemPrefs={saveItemPrefs} categories={categories} saveCategories={saveCategories} ruleOrder={ruleOrder} saveRuleOrder={saveRuleOrder} showToast={showToast}/>}
       </main>
@@ -1186,7 +1186,7 @@ function ShoppingItemRow({ item, onToggle, onMove, onRemove, onMarkHaveIt }) {
 }
 
 // ── Freezer Tab ───────────────────────────────────────────────────────────
-function FreezerTab({ freezer, saveFreezer, showToast }) {
+function FreezerTab({ freezer, saveFreezer, showToast, recipes }) {
   const [addingMeal, setAddingMeal] = useState(false);
   const [addingIng, setAddingIng]   = useState(false);
   const [name, setName]   = useState("");
