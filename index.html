@@ -511,6 +511,21 @@ function PlannerTab({ recipes, family, prefs, freezer, freezerIngredients, showT
 
     consolidated.sort((a,b) => getCategoryOrder(a) - getCategoryOrder(b));
 
+    // ── Step 4b: Add still-need-to-buy ingredients for freezer batch meals ──
+    const freezerMealNames = Object.values(plan).filter(n=>n&&n.startsWith("🧊")).map(n=>n.replace("🧊 ","").trim());
+    freezerMealNames.forEach(mealName=>{
+      const recipe = recipes.find(r=>r.name.toLowerCase()===mealName.toLowerCase()||mealName.toLowerCase().includes(r.name.toLowerCase()));
+      if (!recipe||(recipe.stillNeedToBuy||[]).length===0) return;
+      recipe.stillNeedToBuy.forEach(idx=>{
+        const ing = recipe.ingredients[idx];
+        if (!ing) return;
+        const normKey = ing.toLowerCase().replace(/[^a-z0-9\s]/g,"").trim();
+        if (!accumulator[normKey]) {
+          accumulator[normKey] = { qty:1, unit:"", base:ing, original:ing };
+        }
+      });
+    });
+
     // ── Step 5: Build final shopping items ────────────────────────────────
     const raw = consolidated.map(({text, section})=>({
       id: Date.now().toString()+Math.random(),
@@ -586,7 +601,7 @@ function PlannerTab({ recipes, family, prefs, freezer, freezerIngredients, showT
         prioritiseMissedMeals:   prefs.prioritiseMissedMeals&&"If a family member is not eating, prioritise recipes they cannot eat on those nights",
         fridayTakeaway:          prefs.fridayTakeaway&&"Plan Friday as Takeaway night - assign Takeaway to Friday",
         useFreezerIngredients:   prefs.useFreezerIngredients&&freezerIngredients.length>0&&`Try to include a meal that uses one of these freezer ingredients — match the ingredient type exactly to the recipe's Main Meat tag: ${freezerIngredients.map(i=>i.label+' ('+i.qty+')').join(', ')}`,
-        freezerTowardEndOfWeek:  prefs.freezerTowardEndOfWeek&&(freezerIngredients.length>0||freezer.filter(i=>!i.isIngredient).length>0)&&`Plan meals using freezer ingredients or batch-cooked freezer meals towards the end of the week — specifically prefer ${DAYS.slice(-3).join(', ')} for these meals`,
+        freezerTowardEndOfWeek:  prefs.freezerTowardEndOfWeek&&(freezerIngredients.length>0||freezer.filter(i=>!i.isIngredient).length>0)&&("IMPORTANT: Plan meals using freezer ingredients or batch-cooked freezer meals ONLY on " + DAYS.slice(-3).join(' or ') + " — do NOT assign them on " + DAYS.slice(0,4).join(', ')),
       };
       // Apply priority order — Priority 1 is most important
       const orderedKeys = (ruleOrder&&ruleOrder.length>0) ? ruleOrder : ALL_BUILTIN_RULES.map(r=>r.key);
@@ -618,8 +633,12 @@ function PlannerTab({ recipes, family, prefs, freezer, freezerIngredients, showT
         else if (lockedMeals[d]&&lockedMeals[d].trim()) { normalised[d]=lockedMeals[d].trim(); }
       });
 
-      // Auto-set freezer flags based on what was planned
+      // Auto-set freezer flags based on what was planned — respect quantities
       const updatedFreezerFlags = {...freezerFlags};
+      // Reset all auto-flags first (keep manually set ones? No — regenerate cleanly)
+      DAYS.forEach(d=>{ updatedFreezerFlags[d] = {}; });
+      // Track how many portions of each freezer ingredient we've "used"
+      const freezerUsed = {}; // ingType -> count used
       DAYS.forEach(d=>{
         const meal = normalised[d];
         if (!meal||meal==="—") return;
@@ -627,12 +646,17 @@ function PlannerTab({ recipes, family, prefs, freezer, freezerIngredients, showT
         if (meal.startsWith("🧊")) {
           updatedFreezerFlags[d] = {...(updatedFreezerFlags[d]||{}), other:true};
         }
-        // Check if meal uses a freezer ingredient (match by meat type)
+        // Check if meal uses a freezer ingredient — respect quantity
         const matchedRecipe = recipes.find(r=>meal.toLowerCase().includes(r.name.toLowerCase())||r.name.toLowerCase().includes(meal.toLowerCase()));
         if (matchedRecipe && matchedRecipe.mainMeat && matchedRecipe.mainMeat!=="none") {
-          // Exact match — Chicken Breast only matches Chicken Breast recipes etc.
-          const meatInFreezer = freezerIngredients.some(fi=>fi.ingType===matchedRecipe.mainMeat);
-          if (meatInFreezer) updatedFreezerFlags[d] = {...(updatedFreezerFlags[d]||{}), meat:true};
+          const freezerItem = freezerIngredients.find(fi=>fi.ingType===matchedRecipe.mainMeat);
+          if (freezerItem) {
+            const used = freezerUsed[freezerItem.ingType]||0;
+            if (used < (freezerItem.qty||1)) {
+              updatedFreezerFlags[d] = {...(updatedFreezerFlags[d]||{}), meat:true};
+              freezerUsed[freezerItem.ingType] = used + 1;
+            }
+          }
         }
       });
       setFreezerFlags(updatedFreezerFlags);
@@ -1235,7 +1259,11 @@ function FreezerTab({ freezer, saveFreezer, showToast }) {
       {addingMeal&&(
         <div style={{...S.card,marginBottom:"1.25rem"}}>
           <h3 style={{...S.sectionHead,marginTop:0}}>{editId&&!editIsIng?"Edit":"Add Freezer Meal"}</h3>
-          <input value={name} onChange={e=>setName(e.target.value)} placeholder="Meal name" style={S.input}/>
+          <label style={{color:"#a89f8c",fontSize:"0.78rem",letterSpacing:"0.08em",textTransform:"uppercase",display:"block",marginBottom:"0.3rem"}}>Choose recipe</label>
+          <select value={name} onChange={e=>setName(e.target.value)} style={S.input}>
+            <option value="">— Select a recipe —</option>
+            {recipes.map(r=><option key={r.id} value={r.name}>{r.name}</option>)}
+          </select>
           <div style={{display:"flex",gap:"0.5rem",marginBottom:"0.75rem"}}>
             <input value={qty} onChange={e=>setQty(e.target.value)} type="number" min="1" style={{...S.input,width:"80px",marginBottom:0}}/>
             <select value={unit} onChange={e=>setUnit(e.target.value)} style={{...S.input,flex:1,marginBottom:0}}>{["portions","bags","containers","servings"].map(u=><option key={u}>{u}</option>)}</select>
@@ -1517,10 +1545,11 @@ const MEAT_LABELS = { none:"None", chickenBreast:"Chicken Breast", chickenThigh:
           {/* ── Editable ingredients ── */}
           {r.ingredients?.length > 0 && (
             <>
-              <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:"0.5rem"}}>
+              <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:"0.25rem"}}>
                 <h3 style={{...S.sectionHead,margin:0}}>Ingredients</h3>
                 <button onClick={()=>setAddingIng(p=>!p)} style={{...S.editTimeBtn,color:"#4ade80",borderColor:"#4ade80",fontSize:"0.78rem"}}>+ Add</button>
               </div>
+              <p style={{color:"#666",fontSize:"0.75rem",margin:"0 0 0.5rem"}}>🧊 Tick ingredients still needed when this is a batch-cooked freezer meal</p>
 
               {addingIng && (
                 <div style={{display:"flex",gap:"0.5rem",marginBottom:"0.65rem",flexWrap:"wrap"}}>
@@ -1544,8 +1573,17 @@ const MEAT_LABELS = { none:"None", chickenBreast:"Chicken Breast", chickenThigh:
                         <button onClick={()=>setEditingIngIdx(null)} style={{...S.smallBtn,background:"#333",color:"#aaa"}}>✕</button>
                       </div>
                     ) : (
-                      <div style={{display:"flex",alignItems:"center",gap:"0.5rem",padding:"0.35rem 0",borderBottom:"1px solid #1e1e1e",group:true}}>
-                        <span style={{flex:1,color:"#ccc",fontSize:"0.92rem"}}>• {ing}</span>
+                      <div style={{display:"flex",alignItems:"center",gap:"0.5rem",padding:"0.35rem 0",borderBottom:"1px solid #1e1e1e"}}>
+                        <input type="checkbox"
+                          checked={(r.stillNeedToBuy||[]).includes(idx)}
+                          title="Tick if still needed when batch cooked"
+                          onChange={async()=>{
+                            const current = r.stillNeedToBuy||[];
+                            const updated = current.includes(idx) ? current.filter(i=>i!==idx) : [...current,idx];
+                            await updateRecipe(r.id,{stillNeedToBuy:updated});
+                          }}
+                          style={{accentColor:"#60a5fa",flexShrink:0,cursor:"pointer"}}/>
+                        <span style={{flex:1,color:(r.stillNeedToBuy||[]).includes(idx)?"#60a5fa":"#ccc",fontSize:"0.92rem"}}>• {ing}</span>
                         <button onClick={()=>{ setEditingIngIdx(idx); setIngVal(ing); }}
                           style={{background:"transparent",border:"none",color:"#555",cursor:"pointer",fontSize:"0.8rem",padding:"0.1rem 0.3rem",flexShrink:0}}>✏️</button>
                         <button onClick={()=>deleteIngredient(r,idx)}
