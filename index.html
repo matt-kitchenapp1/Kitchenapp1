@@ -269,7 +269,13 @@ function App() {
   // Filter out items already in pantry when building shopping list
   const filterPantry = (items) => {
     if (!pantry.length) return items;
-    return items.filter(item => !pantry.some(p => item.text.toLowerCase().includes(p.text.toLowerCase()) || p.text.toLowerCase().includes(item.text.toLowerCase())));
+    // Use word-boundary matching to avoid "chicken" matching "chicken breast"
+    const pantryMatch = (shoppingText, pantryText) => {
+      const s = shoppingText.toLowerCase().replace(/[^a-z0-9\s]/g," ").trim();
+      const p = pantryText.toLowerCase().replace(/[^a-z0-9\s]/g," ").trim();
+      return s===p || s.split(/\s+/).join(" ")===p.split(/\s+/).join(" ");
+    };
+    return items.filter(item => !pantry.some(p => pantryMatch(item.text, p.text)));
   };
 
   // Password screen
@@ -1009,8 +1015,12 @@ function ShoppingTab({ shopping, saveShopping, favourites, saveFavourites, itemP
   const addPantryItem = async () => {
     const t=newPantry.trim(); if(!t) return;
     await savePantry([...pantry,{id:Date.now().toString(),text:t}]);
-    // Remove matching items from shopping list
-    const updated = shopping.filter(i=>!i.text.toLowerCase().includes(t.toLowerCase())&&!t.toLowerCase().includes(i.text.toLowerCase()));
+    // Only remove exact matches from shopping list
+    const tNorm = t.toLowerCase().replace(/[^a-z0-9\s]/g," ").trim();
+    const updated = shopping.filter(i=>{
+      const iNorm = i.text.toLowerCase().replace(/[^a-z0-9\s]/g," ").trim();
+      return iNorm!==tNorm;
+    });
     if (updated.length<shopping.length) { await saveShopping(updated); showToast(`"${t}" added to pantry & removed from list`); }
     else showToast(`"${t}" added to pantry ✓`);
     setNewPantry("");
@@ -1175,7 +1185,7 @@ function ShoppingTab({ shopping, saveShopping, favourites, saveFavourites, itemP
   );
 }
 
-function ShoppingItemRow({ item, onToggle, onMove, onRemove, onMarkHaveIt }) {
+function ShoppingItemRow({ item, onToggle, onMove, onRemove, onMarkHaveIt, onEdit, onSplit }) {
   const [expanded, setExpanded] = useState(false);
   const [editing, setEditing]   = useState(false);
   const [editVal, setEditVal]   = useState(item.text);
