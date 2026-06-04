@@ -933,11 +933,15 @@ function PlannerTab({ recipes, family, prefs, freezer, freezerIngredients, showT
                   );
                 })}
               </div>
-              <div style={{display:"flex",gap:"0.5rem",flexWrap:"wrap"}}>
+              <div style={{display:"flex",gap:"0.5rem",flexWrap:"wrap",marginBottom:"0.75rem"}}>
+                <button onClick={async()=>{ await rebuildShopping(localPlan); showToast("Shopping list built ✓"); }}
+                  style={{...S.primaryBtn, background:"#1a3a1a", color:"#4ade80", border:"1px solid #4ade80"}}>
+                  🛒 Build Shopping List
+                </button>
                 <button onClick={()=>setStep("schedule")} style={{...S.primaryBtn,background:"#2a2a2a",color:"#aaa"}}>Regenerate</button>
                 <button onClick={clearPlan} style={{...S.smallBtn,background:"transparent",color:"#f87171",border:"1px solid #f87171"}}>Clear</button>
               </div>
-              <p style={{color:"#666",fontSize:"0.78rem",marginTop:"0.75rem"}}>Tap "Change" on any day to override the meal. Shopping list updates automatically.</p>
+              <p style={{color:"#666",fontSize:"0.78rem",marginTop:"0.75rem"}}>Tap "Change" on any day to override a meal, then tap "Build Shopping List" when you're happy with the plan.</p>
             </div>
           )}
         </div>
