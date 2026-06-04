@@ -546,8 +546,7 @@ function PlannerTab({ recipes, family, prefs, freezer, freezerIngredients, showT
     setManualMealVal("");
     const newPlanData = { plan:newPlan, schedule:localSchedule, diners:localDiners, schoolMeals:localSchool, extraPeople, freezerFlags, lockedMeals };
     await savePlan(newPlanData);
-    await rebuildShopping(newPlan);
-    showToast("Meal updated & shopping list refreshed ✓");
+    showToast("Meal updated ✓ — tap 'Build Shopping List' when ready");
     setOverrideUpdating(false);
   };
 
@@ -560,7 +559,6 @@ function PlannerTab({ recipes, family, prefs, freezer, freezerIngredients, showT
     if (Object.keys(localPlan).length>0) {
       const newPlanData = { plan:localPlan, schedule:localSchedule, diners:localDiners, schoolMeals:localSchool, extraPeople:updated };
       await savePlan(newPlanData);
-      await rebuildShopping(localPlan, updated);
       if (n>0) showToast(`+${n} guest${n>1?"s":""} — shopping list updated`);
     }
   };
@@ -675,8 +673,7 @@ function PlannerTab({ recipes, family, prefs, freezer, freezerIngredients, showT
       const newPlanData = { plan:normalised, schedule:localSchedule, diners:localDiners, schoolMeals:localSchool, previousWeekMeals, extraPeople, freezerFlags:updatedFreezerFlags, lockedMeals };
       await savePlan(newPlanData);
       setLocalPlan(normalised);
-      await rebuildShopping(normalised);
-      setStep("plan"); showToast(`${label} plan generated ✓`);
+      setStep("plan"); showToast(`${label} plan generated ✓ — tap 'Build Shopping List' when ready`);
     } catch(e) { showToast("Couldn't generate plan. Try again.","#f87171"); }
     setGenerating(false);
   };
