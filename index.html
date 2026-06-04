@@ -512,31 +512,17 @@ function PlannerTab({ recipes, family, prefs, freezer, freezerIngredients, showT
     consolidated.sort((a,b) => getCategoryOrder(a) - getCategoryOrder(b));
 
     // ── Step 4b: Add still-need-to-buy ingredients for freezer batch meals ──
-    const allPlanMeals = Object.values(plan).filter(n=>n&&n!=="—");
-    allPlanMeals.forEach(mealName=>{
-      const cleanName = mealName.replace(/^🧊\s*/u,"").trim();
-      const isFreezerMeal = mealName.startsWith("🧊") || freezer.filter(i=>!i.isIngredient).some(f=>f.name.toLowerCase()===cleanName.toLowerCase());
-      if (!isFreezerMeal) return;
-      // Try multiple matching strategies
-      const recipe = recipes.find(r=>
-        r.name.toLowerCase()===cleanName.toLowerCase() ||
-        cleanName.toLowerCase()===r.name.toLowerCase() ||
-        cleanName.toLowerCase().includes(r.name.toLowerCase()) ||
-        r.name.toLowerCase().includes(cleanName.toLowerCase()) ||
-        // Also match the freezer meal name directly
-        freezer.filter(i=>!i.isIngredient).some(f=>
-          f.name.toLowerCase()===cleanName.toLowerCase() &&
-          (r.name.toLowerCase()===f.name.toLowerCase() || f.name.toLowerCase().includes(r.name.toLowerCase()) || r.name.toLowerCase().includes(f.name.toLowerCase()))
-        )
-      );
-      if (!recipe) return;
-      if ((recipe.stillNeedToBuy||[]).length===0) return;
+    Object.values(plan).forEach(mealName=>{
+      if (!mealName||mealName==="—") return;
+      if (!mealName.startsWith("🧊")) return;
+      const cleanName = mealName.slice(mealName.indexOf(" ")+1).trim();
+      const recipe = recipes.find(r=>r.name.trim().toLowerCase()===cleanName.toLowerCase());
+      if (!recipe||(recipe.stillNeedToBuy||[]).length===0) return;
       recipe.stillNeedToBuy.forEach(ingIdx=>{
-        const ing = recipe.ingredients[ingIdx];
+        const ing = (recipe.ingredients||[])[ingIdx];
         if (!ing) return;
-        // Use a unique key to avoid consolidation with regular ingredients
-        const uniqueKey = `still_needed_${recipe.id}_${ingIdx}`;
-        accumulator[uniqueKey] = { qty:1, unit:"", base:ing, original:ing };
+        // Add directly to consolidated so it appears in the shopping list
+        consolidated.push({ text:ing.trim(), section:classifyItem(ing.trim()) });
       });
     });
 
