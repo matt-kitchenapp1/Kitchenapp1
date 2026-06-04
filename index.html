@@ -512,17 +512,19 @@ function PlannerTab({ recipes, family, prefs, freezer, freezerIngredients, showT
     consolidated.sort((a,b) => getCategoryOrder(a) - getCategoryOrder(b));
 
     // ── Step 4b: Add still-need-to-buy ingredients for freezer batch meals ──
-    const freezerMealNames = Object.values(plan).filter(n=>n&&n.startsWith("🧊")).map(n=>n.replace("🧊 ","").trim());
-    freezerMealNames.forEach(mealName=>{
-      const recipe = recipes.find(r=>r.name.toLowerCase()===mealName.toLowerCase()||mealName.toLowerCase().includes(r.name.toLowerCase()));
+    const allPlanMeals = Object.values(plan).filter(n=>n&&n!=="—");
+    allPlanMeals.forEach(mealName=>{
+      // Match both "🧊 Recipe Name" and plain recipe names that exist in freezer
+      const cleanName = mealName.replace(/^🧊\s*/,"").trim();
+      const isFreezerMeal = mealName.startsWith("🧊") || freezer.filter(i=>!i.isIngredient).some(f=>f.name.toLowerCase()===cleanName.toLowerCase());
+      if (!isFreezerMeal) return;
+      const recipe = recipes.find(r=>r.name.toLowerCase()===cleanName.toLowerCase()||cleanName.toLowerCase().includes(r.name.toLowerCase())||r.name.toLowerCase().includes(cleanName.toLowerCase()));
       if (!recipe||(recipe.stillNeedToBuy||[]).length===0) return;
       recipe.stillNeedToBuy.forEach(idx=>{
         const ing = recipe.ingredients[idx];
         if (!ing) return;
-        const normKey = ing.toLowerCase().replace(/[^a-z0-9\s]/g,"").trim();
-        if (!accumulator[normKey]) {
-          accumulator[normKey] = { qty:1, unit:"", base:ing, original:ing };
-        }
+        const normKey = "freezer_extra_"+idx+"_"+recipe.id;
+        accumulator[normKey] = { qty:1, unit:"", base:ing, original:ing };
       });
     });
 
@@ -634,17 +636,19 @@ function PlannerTab({ recipes, family, prefs, freezer, freezerIngredients, showT
       });
 
       // Auto-set freezer flags based on what was planned — respect quantities
-      const updatedFreezerFlags = {...freezerFlags};
-      // Reset all auto-flags first (keep manually set ones? No — regenerate cleanly)
+      const updatedFreezerFlags = {};
       DAYS.forEach(d=>{ updatedFreezerFlags[d] = {}; });
-      // Track how many portions of each freezer ingredient we've "used"
+      const lastThreeDays = DAYS.slice(-3);
       const freezerUsed = {}; // ingType -> count used
-      DAYS.forEach(d=>{
+      // Process last 3 days first so they get priority for freezer flags
+      const daysPrioritised = [...lastThreeDays, ...DAYS.filter(d=>!lastThreeDays.includes(d))];
+      daysPrioritised.forEach(d=>{
         const meal = normalised[d];
         if (!meal||meal==="—") return;
         // Check if meal is a freezer batch meal
         if (meal.startsWith("🧊")) {
           updatedFreezerFlags[d] = {...(updatedFreezerFlags[d]||{}), other:true};
+          return; // batch meal — no need to check meat
         }
         // Check if meal uses a freezer ingredient — respect quantity
         const matchedRecipe = recipes.find(r=>meal.toLowerCase().includes(r.name.toLowerCase())||r.name.toLowerCase().includes(meal.toLowerCase()));
