@@ -584,8 +584,8 @@ function PlannerTab({ recipes, family, prefs, freezer, freezerIngredients, showT
         mondayPrawns:            prefs.mondayPrawns&&"On Monday, use a prawn or seafood dish (frozen prawns are available)",
         prioritiseMissedMeals:   prefs.prioritiseMissedMeals&&"If a family member is not eating, prioritise recipes they cannot eat on those nights",
         fridayTakeaway:          prefs.fridayTakeaway&&"Plan Friday as Takeaway night - assign Takeaway to Friday",
-        useFreezerIngredients:   prefs.useFreezerIngredients&&freezerIngredients.length>0&&`Try to include a meal using these freezer ingredients: ${freezerIngredients.map(i=>i.label+' ('+i.qty+')').join(', ')}`,
-        freezerTowardEndOfWeek:  prefs.freezerTowardEndOfWeek&&(freezerIngredients.length>0||freezer.filter(i=>!i.isIngredient).length>0)&&"Plan meals using freezer ingredients or batch-cooked freezer meals towards the end of the week",
+        useFreezerIngredients:   prefs.useFreezerIngredients&&freezerIngredients.length>0&&`Try to include a meal that uses one of these freezer ingredients — match the ingredient type exactly to the recipe's Main Meat tag: ${freezerIngredients.map(i=>i.label+' ('+i.qty+')').join(', ')}`,
+        freezerTowardEndOfWeek:  prefs.freezerTowardEndOfWeek&&(freezerIngredients.length>0||freezer.filter(i=>!i.isIngredient).length>0)&&`Plan meals using freezer ingredients or batch-cooked freezer meals towards the end of the week — specifically prefer ${DAYS.slice(-3).join(', ')} for these meals`,
       };
       // Apply priority order — Priority 1 is most important
       const orderedKeys = (ruleOrder&&ruleOrder.length>0) ? ruleOrder : ALL_BUILTIN_RULES.map(r=>r.key);
@@ -629,7 +629,8 @@ function PlannerTab({ recipes, family, prefs, freezer, freezerIngredients, showT
         // Check if meal uses a freezer ingredient (match by meat type)
         const matchedRecipe = recipes.find(r=>meal.toLowerCase().includes(r.name.toLowerCase())||r.name.toLowerCase().includes(meal.toLowerCase()));
         if (matchedRecipe && matchedRecipe.mainMeat && matchedRecipe.mainMeat!=="none") {
-          const meatInFreezer = freezerIngredients.some(fi=>fi.ingType===matchedRecipe.mainMeat||fi.label?.toLowerCase().includes(matchedRecipe.mainMeat.toLowerCase()));
+          // Exact match — Chicken Breast only matches Chicken Breast recipes etc.
+          const meatInFreezer = freezerIngredients.some(fi=>fi.ingType===matchedRecipe.mainMeat);
           if (meatInFreezer) updatedFreezerFlags[d] = {...(updatedFreezerFlags[d]||{}), meat:true};
         }
       });
@@ -638,7 +639,7 @@ function PlannerTab({ recipes, family, prefs, freezer, freezerIngredients, showT
       const previousWeekMeals = !isCurrentWeek
         ? [] // upcoming plan doesn't need to track its own prev week here; that comes from current
         : Object.values(normalised).filter(n=>n&&n!=="—"&&!n.startsWith("🧊"));
-      const newPlanData = { plan:normalised, schedule:localSchedule, diners:localDiners, schoolMeals:localSchool, previousWeekMeals, extraPeople, freezerFlags, lockedMeals };
+      const newPlanData = { plan:normalised, schedule:localSchedule, diners:localDiners, schoolMeals:localSchool, previousWeekMeals, extraPeople, freezerFlags:updatedFreezerFlags, lockedMeals };
       await savePlan(newPlanData);
       setLocalPlan(normalised);
       await rebuildShopping(normalised);
@@ -1354,7 +1355,7 @@ function RecipesTab({ recipes, saveRecipes, family, showToast }) {
 
   const CARB_LABELS = { none:"No main carb", pasta:"🍝 Pasta", rice:"🍚 Rice", noodles:"🍜 Noodles", bread:"🍞 Bread", potato:"🥔 Potato", bulgur:"🌾 Bulgur Wheat", other:"Other" };
   
-const MEAT_LABELS = { none:"None", chicken:"Chicken", porkMince:"Pork Mince", sausages:"Sausages", prawns:"Prawns", turkeyMince:"Turkey Mince", beef:"Beef", pork:"Pork", lamb:"Lamb", fish:"Fish", bacon:"Bacon" };
+const MEAT_LABELS = { none:"None", chickenBreast:"Chicken Breast", chickenThigh:"Chicken Thigh", porkMince:"Pork Mince", sausages:"Sausages", prawns:"Prawns", turkeyMince:"Turkey Mince", beef:"Beef", pork:"Pork", lamb:"Lamb", fish:"Fish", bacon:"Bacon" };
 
   const processRecipe = async (source, imageBase64=null, mediaType=null) => {
     setProcessing(true); setApiError("");
