@@ -1693,6 +1693,12 @@ function SettingsTab({ prefs, savePrefs, weekStart, saveWeekStart, itemPrefs, sa
   const [newCat, setNewCat]     = useState("");
   const [editingCat, setEditingCat] = useState(null); // index being renamed
   const [editCatVal, setEditCatVal] = useState("");
+  const [localRuleOrder, setLocalRuleOrder] = useState(()=>{
+    const existing = ruleOrder&&ruleOrder.length>0 ? ruleOrder : ALL_BUILTIN_RULES.map(r=>r.key);
+    const allKeys = ALL_BUILTIN_RULES.map(r=>r.key);
+    const missing = allKeys.filter(k=>!existing.includes(k));
+    return [...existing, ...missing];
+  });
 
   const toggle = k => setLocal(p=>({...p,[k]:!p[k]}));
   const save = async () => { await savePrefs(local); await saveWeekStart(ws); await saveCategories(localCats); await saveRuleOrder(localRuleOrder); showToast("Settings saved ✓"); };
