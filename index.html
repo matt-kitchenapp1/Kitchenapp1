@@ -969,6 +969,30 @@ function ShoppingTab({ shopping, saveShopping, favourites, saveFavourites, itemP
   const toggle = async id => { await saveShopping(shopping.map(i=>i.id===id?{...i,checked:!i.checked}:i)); };
   const removeItem = async id => { await saveShopping(shopping.filter(i=>i.id!==id)); };
   const removeChecked = async () => { await saveShopping(shopping.filter(i=>!i.checked)); showToast("Checked items removed."); };
+  const editItem = async (id, newText) => { if(!newText.trim()) return; await saveShopping(shopping.map(i=>i.id===id?{...i,text:newText.trim()}:i)); };
+  const splitItem = async (id) => {
+    const item = shopping.find(i=>i.id===id); if(!item) return;
+    // Try to parse a leading number from the text e.g. "2 chicken breasts" -> qty=2, base="chicken breasts"
+    const match = item.text.match(/^(\d+(?:\.\d+)?)\s+(.*)/);
+    if (!match||parseFloat(match[1])<=1) {
+      // Can't split — just duplicate it
+      const copy = {...item, id:Date.now().toString()+Math.random(), text:item.text};
+      await saveShopping([...shopping, copy]);
+      showToast("Item duplicated — adjust quantities as needed");
+    } else {
+      const qty = parseFloat(match[1]);
+      const base = match[2];
+      const half1 = Math.floor(qty/2);
+      const half2 = qty - half1;
+      const fmt = n => n%1===0?String(n):String(n);
+      const newItems = shopping.map(i=>i.id===id?{...i,text:`${fmt(half1)} ${base}`}:i);
+      const copy = {...item, id:Date.now().toString()+Math.random(), text:`${fmt(half2)} ${base}`};
+      const insertIdx = newItems.findIndex(i=>i.id===id)+1;
+      newItems.splice(insertIdx, 0, copy);
+      await saveShopping(newItems);
+      showToast("Split into two — assign each to online or store");
+    }
+  };
   const selectAll = async () => {
     const allChecked = filtered.every(i=>i.checked);
     await saveShopping(shopping.map(i=>filtered.find(f=>f.id===i.id)?{...i,checked:!allChecked}:i));
@@ -1131,7 +1155,7 @@ function ShoppingTab({ shopping, saveShopping, favourites, saveFavourites, itemP
         <div style={{...S.emptyState,padding:"1.5rem"}}><p style={{color:"#666",margin:0}}>No {section} items remaining.</p></div>
       ):(
         <div style={{display:"flex",flexDirection:"column",gap:"0.4rem"}}>
-          {unchecked.map(item=><ShoppingItemRow key={item.id} item={item} onToggle={toggle} onMove={moveItem} onRemove={removeItem} onMarkHaveIt={markHaveIt}/>)}
+          {unchecked.map(item=><ShoppingItemRow key={item.id} item={item} onToggle={toggle} onMove={moveItem} onRemove={removeItem} onMarkHaveIt={markHaveIt} onEdit={editItem} onSplit={splitItem}/>)}
           {checked.length>0&&<>
             <div style={{color:"#555",fontSize:"0.75rem",letterSpacing:"0.1em",textTransform:"uppercase",margin:"0.75rem 0 0.25rem"}}>Done</div>
             {checked.map(item=><ShoppingItemRow key={item.id} item={item} onToggle={toggle} onMove={moveItem} onRemove={removeItem} onMarkHaveIt={null}/>)}
@@ -1153,6 +1177,8 @@ function ShoppingTab({ shopping, saveShopping, favourites, saveFavourites, itemP
 
 function ShoppingItemRow({ item, onToggle, onMove, onRemove, onMarkHaveIt }) {
   const [expanded, setExpanded] = useState(false);
+  const [editing, setEditing]   = useState(false);
+  const [editVal, setEditVal]   = useState(item.text);
   const sectionIcon = item.section==="online"?"🌐":item.section==="store"?"🏪":"❓";
   return (
     <div style={{...S.shoppingItem,opacity:item.checked?0.5:1}}>
@@ -1160,8 +1186,21 @@ function ShoppingItemRow({ item, onToggle, onMove, onRemove, onMarkHaveIt }) {
         <div onClick={()=>onToggle(item.id)} style={{...S.checkbox,...(item.checked?S.checkboxChecked:{}),cursor:"pointer",flexShrink:0}}>
           {item.checked&&<span style={{color:"#1a1a2e",fontSize:"11px",fontWeight:"bold"}}>✓</span>}
         </div>
-        <span onClick={()=>onToggle(item.id)} style={{flex:1,textDecoration:item.checked?"line-through":"none",color:"#f5f0e8",cursor:"pointer",fontSize:"0.92rem"}}>{item.text}</span>
-        {!item.checked&&(
+        {editing ? (
+          <div style={{flex:1,display:"flex",gap:"0.4rem",alignItems:"center"}}>
+            <input value={editVal} onChange={e=>setEditVal(e.target.value)} autoFocus
+              onKeyDown={e=>{ if(e.key==="Enter"){ onEdit(item.id,editVal); setEditing(false); } if(e.key==="Escape") setEditing(false); }}
+              style={{...S.input,flex:1,marginBottom:0,fontSize:"0.88rem",padding:"0.3rem 0.5rem"}}/>
+            <button onClick={()=>{ onEdit(item.id,editVal); setEditing(false); }} style={S.smallBtn}>Save</button>
+            <button onClick={()=>setEditing(false)} style={{...S.smallBtn,background:"#333",color:"#aaa"}}>✕</button>
+          </div>
+        ) : (
+          <span onDoubleClick={()=>{ setEditVal(item.text); setEditing(true); }}
+            onClick={()=>onToggle(item.id)}
+            style={{flex:1,textDecoration:item.checked?"line-through":"none",color:"#f5f0e8",cursor:"pointer",fontSize:"0.92rem"}}
+            title="Double-tap to edit quantity">{item.text}</span>
+        )}
+        {!item.checked&&!editing&&(
           <button onClick={()=>setExpanded(p=>!p)}
             style={{background:"transparent",border:"1px solid #2a2a2a",borderRadius:"6px",padding:"0.2rem 0.4rem",cursor:"pointer",fontSize:"0.8rem",color:"#666",flexShrink:0}}>
             {sectionIcon}
@@ -1178,6 +1217,12 @@ function ShoppingItemRow({ item, onToggle, onMove, onRemove, onMarkHaveIt }) {
             </button>
           ))}
           <div style={{flex:1}}/>
+          {onSplit&&(
+            <button onClick={()=>{ onSplit(item.id); setExpanded(false); }}
+              style={{padding:"0.22rem 0.6rem",borderRadius:"6px",fontSize:"0.75rem",cursor:"pointer",fontFamily:"inherit",border:"1px solid #60a5fa",background:"#1a2a3a",color:"#60a5fa"}}>
+              ✂️ Split
+            </button>
+          )}
           {onMarkHaveIt&&(
             <button onClick={()=>{ onMarkHaveIt(item.id); setExpanded(false); }}
               style={{padding:"0.22rem 0.6rem",borderRadius:"6px",fontSize:"0.75rem",cursor:"pointer",fontFamily:"inherit",border:"1px solid #4ade80",background:"#052e16",color:"#4ade80"}}>
