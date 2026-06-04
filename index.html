@@ -514,17 +514,29 @@ function PlannerTab({ recipes, family, prefs, freezer, freezerIngredients, showT
     // ── Step 4b: Add still-need-to-buy ingredients for freezer batch meals ──
     const allPlanMeals = Object.values(plan).filter(n=>n&&n!=="—");
     allPlanMeals.forEach(mealName=>{
-      // Match both "🧊 Recipe Name" and plain recipe names that exist in freezer
-      const cleanName = mealName.replace(/^🧊\s*/,"").trim();
+      const cleanName = mealName.replace(/^🧊\s*/u,"").trim();
       const isFreezerMeal = mealName.startsWith("🧊") || freezer.filter(i=>!i.isIngredient).some(f=>f.name.toLowerCase()===cleanName.toLowerCase());
       if (!isFreezerMeal) return;
-      const recipe = recipes.find(r=>r.name.toLowerCase()===cleanName.toLowerCase()||cleanName.toLowerCase().includes(r.name.toLowerCase())||r.name.toLowerCase().includes(cleanName.toLowerCase()));
-      if (!recipe||(recipe.stillNeedToBuy||[]).length===0) return;
-      recipe.stillNeedToBuy.forEach(idx=>{
-        const ing = recipe.ingredients[idx];
+      // Try multiple matching strategies
+      const recipe = recipes.find(r=>
+        r.name.toLowerCase()===cleanName.toLowerCase() ||
+        cleanName.toLowerCase()===r.name.toLowerCase() ||
+        cleanName.toLowerCase().includes(r.name.toLowerCase()) ||
+        r.name.toLowerCase().includes(cleanName.toLowerCase()) ||
+        // Also match the freezer meal name directly
+        freezer.filter(i=>!i.isIngredient).some(f=>
+          f.name.toLowerCase()===cleanName.toLowerCase() &&
+          (r.name.toLowerCase()===f.name.toLowerCase() || f.name.toLowerCase().includes(r.name.toLowerCase()) || r.name.toLowerCase().includes(f.name.toLowerCase()))
+        )
+      );
+      if (!recipe) return;
+      if ((recipe.stillNeedToBuy||[]).length===0) return;
+      recipe.stillNeedToBuy.forEach(ingIdx=>{
+        const ing = recipe.ingredients[ingIdx];
         if (!ing) return;
-        const normKey = "freezer_extra_"+idx+"_"+recipe.id;
-        accumulator[normKey] = { qty:1, unit:"", base:ing, original:ing };
+        // Use a unique key to avoid consolidation with regular ingredients
+        const uniqueKey = `still_needed_${recipe.id}_${ingIdx}`;
+        accumulator[uniqueKey] = { qty:1, unit:"", base:ing, original:ing };
       });
     });
 
@@ -623,7 +635,13 @@ function PlannerTab({ recipes, family, prefs, freezer, freezerIngredients, showT
         return `${d.day} [UP TO ${d.maxTime}min — any shorter meal is fine too, eating:${eatingNames}]:\n${locked}\n${schoolNote}\n${names||"  (no suitable recipes)"}`;
       }).join("\n\n");
       const dayKeys = DAYS.map(d=>d.toLowerCase());
-      const system = `You are a meal planner. Return ONLY valid JSON, no markdown:\n{${dayKeys.map(d=>`"${d}":"recipe name"`).join(",")}}\nRules:\n${allRules}\n- Only use eligible recipes per day\n- The time shown per day is a MAXIMUM — shorter meals are always acceptable\n- Vary meals across week; prefer variety in cook times too\n- Freezer meals ok (prefix "🧊 ")\n- Use "—" if nothing fits`;
+      const freezerIngPlanned = freezerIngredients.length>0||freezer.filter(i=>!i.isIngredient).length>0;
+      const freezerMeatList = freezerIngredients.map(i=>i.label).join(", ");
+      const freezerBatchList = freezer.filter(i=>!i.isIngredient).map(i=>i.name).join(", ");
+      const freezerHardConstraint = (prefs.freezerTowardEndOfWeek&&freezerIngPlanned)
+        ? `\n- HARD CONSTRAINT: The following items are in the freezer and MUST only be used in meals planned on ${DAYS.slice(-3).join(" or ")} — NEVER on ${DAYS.slice(0,4).join(", ")}:${freezerMeatList ? " Freezer meat/ingredients: "+freezerMeatList+"." : ""}${freezerBatchList ? " Batch-cooked freezer meals: "+freezerBatchList+"." : ""} Any recipe whose main meat matches a freezer ingredient listed above must go on one of the last 3 days only.`
+        : "";
+      const system = `You are a meal planner. Return ONLY valid JSON, no markdown:\n{${dayKeys.map(d=>`"${d}":"recipe name"`).join(",")}}\nRules:\n${allRules}${freezerHardConstraint}\n- Only use eligible recipes per day\n- The time shown per day is a MAXIMUM — shorter meals are always acceptable\n- Vary meals across week; prefer variety in cook times too\n- Freezer meals ok (prefix "🧊 ")\n- Use "—" if nothing fits`;
       const raw  = await callClaude(system,`Plan 7 dinners for ${label}.\n${freezerStr}\n${recipeListStr}`);
       const plan = JSON.parse(raw.replace(/```json|```/g,"").trim());
       const normalised = {};
@@ -647,7 +665,7 @@ function PlannerTab({ recipes, family, prefs, freezer, freezerIngredients, showT
         if (!meal||meal==="—") return;
         // Check if meal is a freezer batch meal
         if (meal.startsWith("🧊")) {
-          updatedFreezerFlags[d] = {...(updatedFreezerFlags[d]||{}), other:true};
+          updatedFreezerFlags[d] = {...(updatedFreezerFlags[d]||{}), meal:true};
           return; // batch meal — no need to check meat
         }
         // Check if meal uses a freezer ingredient — respect quantity
@@ -828,7 +846,7 @@ function PlannerTab({ recipes, family, prefs, freezer, freezerIngredients, showT
                           {school&&<div style={{fontSize:"0.72rem",color:"#666",marginTop:"0.2rem"}}>🏫 {school}</div>}
                           {/* Freezer checkboxes */}
                           <div style={{display:"flex",gap:"0.5rem",marginTop:"0.3rem",flexWrap:"wrap"}}>
-                            {[["meat","Meat in freezer"],["other","Other item in freezer"]].map(([k,lbl])=>{
+                            {[["meal","Batch meal in freezer"],["meat","Meat in freezer"],["other","Other item in freezer"]].map(([k,lbl])=>{
                               const checked = freezerFlags[day]?.[k]||false;
                               return (
                                 <label key={k} style={{display:"flex",alignItems:"center",gap:"0.25rem",cursor:"pointer",fontSize:"0.72rem",color:checked?"#4ade80":"#555"}}>
@@ -843,7 +861,7 @@ function PlannerTab({ recipes, family, prefs, freezer, freezerIngredients, showT
                             })}
                           </div>
                           {/* Reminder button — only show if any freezer flag is set */}
-                          {(freezerFlags[day]?.meat||freezerFlags[day]?.other)&&meal&&meal!=="—"&&(()=>{
+                          {(freezerFlags[day]?.meal||freezerFlags[day]?.meat||freezerFlags[day]?.other)&&meal&&meal!=="—"&&(()=>{
                             // Calculate 22:30 the night before
                             const dayIdx = DAYS.indexOf(day);
                             const prevDay = DAYS[(dayIdx-1+DAYS.length)%DAYS.length];
@@ -861,7 +879,7 @@ function PlannerTab({ recipes, family, prefs, freezer, freezerIngredients, showT
                                 const pad = n=>String(n).padStart(2,"0");
                                 const dtStr = `${reminderDate.getFullYear()}${pad(reminderDate.getMonth()+1)}${pad(reminderDate.getDate())}T${pad(reminderDate.getHours())}${pad(reminderDate.getMinutes())}00`;
                                 const endStr = `${reminderDate.getFullYear()}${pad(reminderDate.getMonth()+1)}${pad(reminderDate.getDate())}T${pad(reminderDate.getHours())}${pad(reminderDate.getMinutes()+5)}00`;
-                                const items = [freezerFlags[day]?.meat&&"meat",freezerFlags[day]?.other&&"other freezer item"].filter(Boolean).join(" and ");
+                                const items = [freezerFlags[day]?.meal&&"batch meal",freezerFlags[day]?.meat&&"meat",freezerFlags[day]?.other&&"other freezer item"].filter(Boolean).join(" and ");
                                 const title = encodeURIComponent(`Take ${items} out of freezer for ${meal}`);
                                 const icsContent = ["BEGIN:VCALENDAR","VERSION:2.0","BEGIN:VEVENT",`DTSTART:${dtStr}`,`DTEND:${endStr}`,`SUMMARY:${decodeURIComponent(title)}`,"END:VEVENT","END:VCALENDAR"].join("\n");
                                 const blob = new Blob([icsContent],{type:"text/calendar"});
