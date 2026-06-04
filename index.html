@@ -386,26 +386,114 @@ function PlannerTab({ recipes, family, prefs, freezer, freezerIngredients, showT
   const rebuildShopping = async (plan, ep=extraPeople) => {
     const allMeals = Object.values(plan).filter(n=>n&&n!=="—"&&!n.startsWith("🧊"));
     const matched = recipes.filter(r=>allMeals.some(n=>n.toLowerCase().includes(r.name.toLowerCase())||r.name.toLowerCase().includes(n.toLowerCase())));
-    // Build ingredient list — if a meal has extra people that day, note the scaling
-    const ingredientMap = {}; // text -> max multiplier needed
+
+    // ── Step 1: Collect all ingredients with quantities ───────────────────
+    // Parse quantity from ingredient string e.g. "2 tins chopped tomatoes" -> {qty:2, unit:"tins", base:"chopped tomatoes"}
+    const parseIngredient = (text) => {
+      const t = text.trim();
+      // Match patterns like "2", "1/2", "½", "1.5" at the start
+      const qtyMatch = t.match(/^(\d+(?:[./]\d+)?|[½¼¾⅓⅔])\s*(tbsp|tsp|g|kg|ml|l|oz|lb|tin|tins|can|cans|clove|cloves|bunch|bunches|sprig|sprigs|pack|packs|bag|bags|piece|pieces|portion|portions|handful|handfuls|slice|slices|rasher|rashers|fillet|fillets|steak|steaks|breast|breasts|thigh|thighs|pot|pots|carton|cartons|jar|jars|sachet|sachets|cup|cups|stick|sticks)s?\b\.?\s*/i);
+      if (qtyMatch) {
+        let qty = qtyMatch[1];
+        // Handle fractions
+        if (qty==='½') qty=0.5; else if (qty==='¼') qty=0.25; else if (qty==='¾') qty=0.75;
+        else if (qty==='⅓') qty=0.333; else if (qty==='⅔') qty=0.667;
+        else if (qty.includes('/')) { const [a,b]=qty.split('/'); qty=parseFloat(a)/parseFloat(b); }
+        else qty=parseFloat(qty);
+        const unit = qtyMatch[2].toLowerCase();
+        const base = t.slice(qtyMatch[0].length).trim();
+        return { qty, unit, base, original:t };
+      }
+      // Match plain number at start (no unit)
+      const numMatch = t.match(/^(\d+(?:[./]\d+)?|[½¼¾])\s+(.+)/);
+      if (numMatch) {
+        let qty = numMatch[1];
+        if (qty==='½') qty=0.5; else if (qty==='¼') qty=0.25; else if (qty==='¾') qty=0.75;
+        else qty=parseFloat(qty);
+        return { qty, unit:'', base:numMatch[2].trim(), original:t };
+      }
+      return { qty:1, unit:'', base:t, original:t };
+    };
+
+    const formatQty = (qty, unit) => {
+      const rounded = Math.round(qty*100)/100;
+      const str = rounded%1===0 ? String(rounded) : rounded===0.5?'½':rounded===0.25?'¼':rounded===0.75?'¾':String(rounded);
+      return unit ? `${str} ${unit}` : str;
+    };
+
+    // ── Step 2: Accumulate ingredients across recipes ─────────────────────
+    // key: normalised base ingredient name -> { qty, unit, display, count }
+    const accumulator = {};
+
     matched.forEach(r=>{
-      // find which days use this recipe
-      const days = DAYS.filter(d=> plan[d] && (plan[d].toLowerCase().includes(r.name.toLowerCase())||r.name.toLowerCase().includes(plan[d].toLowerCase())));
-      const maxExtra = Math.max(0, ...days.map(d=>ep[d]||0));
-      const baseServings = family.length; // rough household size
-      const totalServings = baseServings + maxExtra;
-      const multiplier = maxExtra>0 ? (totalServings/baseServings) : 1;
+      const days = DAYS.filter(d=>plan[d]&&(plan[d].toLowerCase().includes(r.name.toLowerCase())||r.name.toLowerCase().includes(plan[d].toLowerCase())));
+      const maxExtra = Math.max(0,...days.map(d=>ep[d]||0));
+      const multiplier = maxExtra>0 ? (family.length+maxExtra)/family.length : 1;
+
       (r.ingredients||[]).forEach(ing=>{
-        const key = ing.toLowerCase();
-        if (!ingredientMap[key] || multiplier > ingredientMap[key].multiplier) {
-          ingredientMap[key] = { text:ing, multiplier };
+        const parsed = parseIngredient(ing);
+        const normKey = parsed.base.toLowerCase().replace(/[^a-z0-9\s]/g,'').trim();
+        const scaledQty = parsed.qty * multiplier;
+
+        if (accumulator[normKey]) {
+          // Same unit — add quantities
+          if (accumulator[normKey].unit === parsed.unit) {
+            accumulator[normKey].qty += scaledQty;
+          } else if (!accumulator[normKey].unit || !parsed.unit) {
+            // One has no unit — just add counts
+            accumulator[normKey].qty += scaledQty;
+          } else {
+            // Different units — keep as separate entry with suffix
+            const altKey = normKey + '_' + parsed.unit;
+            if (accumulator[altKey]) { accumulator[altKey].qty += scaledQty; }
+            else { accumulator[altKey] = { qty:scaledQty, unit:parsed.unit, base:parsed.base, original:ing }; }
+            return;
+          }
+        } else {
+          accumulator[normKey] = { qty:scaledQty, unit:parsed.unit, base:parsed.base, original:ing };
         }
       });
     });
-    const raw = Object.values(ingredientMap).map(({text, multiplier})=>({
+
+    // ── Step 3: Format consolidated ingredients ───────────────────────────
+    const consolidated = Object.values(accumulator).map(({qty, unit, base, original})=>{
+      let text;
+      if (qty===1 && !unit) { text = original; }
+      else { text = `${formatQty(qty, unit)} ${base}`.trim(); }
+      return { text, section: classifyItem(text) };
+    });
+
+    // ── Step 4: Sort by shopping categories ──────────────────────────────
+    // categories comes from the outer scope via closure
+    const getCategoryOrder = (item) => {
+      const lowerText = item.text.toLowerCase();
+      // Try to match against category names (rough keyword matching)
+      const categoryKeywords = {
+        0: ['apple','banana','grape','berry','berries','lemon','lime','orange','mango','pear','peach','tomato','tomatoes','onion','garlic','carrot','courgette','pepper','aubergine','spinach','lettuce','salad','herb','basil','parsley','coriander','ginger','leek','celery','spring onion','broccoli','cauliflower','pea','bean','sweetcorn','mushroom','avocado','cucumber','rocket','watercress','kale'],
+        1: ['chicken','beef','pork','lamb','turkey','fish','tuna','salmon','prawn','sausage','chorizo','mince','bacon','steak','fillet','breast','thigh','medallion'],
+        2: ['milk','cream','yoghurt','butter','egg','cheese','feta','parmesan','mozzarella'],
+        3: ['bread','bun','baguette','ciabatta','pitta','wrap','tortilla','roll','brioche'],
+        4: ['tin','can','jar','passata','tomato','stock pot','coconut milk','chickpea','kidney bean','lentil','olive','pesto'],
+        5: ['rice','pasta','noodle','flour','bulgur','couscous','oat','lentil','sugar','salt','pepper','spice','paprika','cumin','oregano','herb','oil','vinegar','sauce','ketchup','mustard','soy','honey','cornflour'],
+        6: ['juice','water','stock','wine','beer','milk'],
+        7: ['crisp','biscuit','chocolate','nut','peanut','almond','seed'],
+        8: ['frozen'],
+        9: ['washing','cleaning','detergent','bleach','spray'],
+      };
+      // Check each category's keywords
+      for (const [catIdx, keywords] of Object.entries(categoryKeywords)) {
+        if (keywords.some(kw => lowerText.includes(kw))) return parseInt(catIdx);
+      }
+      return 999; // Other / uncategorised
+    };
+
+    consolidated.sort((a,b) => getCategoryOrder(a) - getCategoryOrder(b));
+
+    // ── Step 5: Build final shopping items ────────────────────────────────
+    const raw = consolidated.map(({text, section})=>({
       id: Date.now().toString()+Math.random(),
-      text: multiplier>1 ? `${text} ×${multiplier.toFixed(1).replace(/\.0$/,"")} (guests)` : text,
-      section: classifyItem(text),
+      text,
+      section,
       checked: false,
     }));
     const filtered = filterPantry(raw);
