@@ -136,8 +136,9 @@ const ALL_BUILTIN_RULES = [
 ];
 const DEFAULT_CATEGORIES = ["Fruit & Veg","Meat & Fish","Dairy","Bakery","Tins & Jars","Dry Goods","Drinks","Snacks","Frozen","Cleaning","Other"];
 const FREEZER_INGREDIENT_TYPES = [
-  { key:"chickenBreast", label:"Chicken Breast", isMeat:true },
-  { key:"chickenThigh",  label:"Chicken Thigh",  isMeat:true },
+  { key:"chickenBreast",  label:"Chicken Breast",  isMeat:true },
+  { key:"chickenThigh",   label:"Chicken Thigh",   isMeat:true },
+  { key:"wholeChicken",   label:"Whole Chicken",   isMeat:true },
   { key:"porkMince",     label:"Pork Mince",     isMeat:true },
   { key:"sausages",      label:"Sausages",       isMeat:true },
   { key:"prawns",        label:"Prawns",         isMeat:true },
@@ -1355,7 +1356,7 @@ function RecipesTab({ recipes, saveRecipes, family, showToast }) {
 
   const CARB_LABELS = { none:"No main carb", pasta:"🍝 Pasta", rice:"🍚 Rice", noodles:"🍜 Noodles", bread:"🍞 Bread", potato:"🥔 Potato", bulgur:"🌾 Bulgur Wheat", other:"Other" };
   
-const MEAT_LABELS = { none:"None", chickenBreast:"Chicken Breast", chickenThigh:"Chicken Thigh", porkMince:"Pork Mince", sausages:"Sausages", prawns:"Prawns", turkeyMince:"Turkey Mince", beef:"Beef", pork:"Pork", lamb:"Lamb", fish:"Fish", bacon:"Bacon" };
+const MEAT_LABELS = { none:"None", chickenBreast:"Chicken Breast", chickenThigh:"Chicken Thigh", wholeChicken:"Whole Chicken", porkMince:"Pork Mince", sausages:"Sausages", prawns:"Prawns", turkeyMince:"Turkey Mince", beef:"Beef", pork:"Pork", lamb:"Lamb", fish:"Fish", bacon:"Bacon" };
 
   const processRecipe = async (source, imageBase64=null, mediaType=null) => {
     setProcessing(true); setApiError("");
