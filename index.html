@@ -117,6 +117,23 @@ const DEFAULT_PREFS = {
   customRules:[], // [{ id, text, enabled }]
 };
 const DEFAULT_CATEGORIES = ["Fruit & Veg","Meat & Fish","Dairy","Bakery","Tins & Jars","Dry Goods","Drinks","Snacks","Frozen","Cleaning","Other"];
+const FREEZER_INGREDIENT_TYPES = [
+  { key:"chickenBreast", label:"Chicken Breast", isMeat:true },
+  { key:"chickenThigh",  label:"Chicken Thigh",  isMeat:true },
+  { key:"porkMince",     label:"Pork Mince",     isMeat:true },
+  { key:"sausages",      label:"Sausages",       isMeat:true },
+  { key:"prawns",        label:"Prawns",         isMeat:true },
+  { key:"turkeyMince",   label:"Turkey Mince",   isMeat:true },
+  { key:"beef",          label:"Beef",           isMeat:true },
+  { key:"pork",          label:"Pork",           isMeat:true },
+  { key:"lamb",          label:"Lamb",           isMeat:true },
+  { key:"fish",          label:"Fish",           isMeat:true },
+  { key:"bacon",         label:"Bacon",          isMeat:true },
+  { key:"burgerBuns",    label:"Burger Buns",    isMeat:false },
+  { key:"hotDogBuns",    label:"Hot Dog Buns",   isMeat:false },
+  { key:"other",         label:"Other",          isMeat:false },
+];
+
 
 function orderedDays(startDay) {
   const idx = ALL_DAYS.indexOf(startDay);
@@ -1185,22 +1202,7 @@ function RecipesTab({ recipes, saveRecipes, family, showToast }) {
   const [newIngVal, setNewIngVal]       = useState("");
 
   const CARB_LABELS = { none:"No main carb", pasta:"🍝 Pasta", rice:"🍚 Rice", noodles:"🍜 Noodles", bread:"🍞 Bread", potato:"🥔 Potato", bulgur:"🌾 Bulgur Wheat", other:"Other" };
-  const FREEZER_INGREDIENT_TYPES = [
-  { key:"chickenBreast", label:"Chicken Breast", isMeat:true },
-  { key:"chickenThigh",  label:"Chicken Thigh",  isMeat:true },
-  { key:"porkMince",     label:"Pork Mince",     isMeat:true },
-  { key:"sausages",      label:"Sausages",       isMeat:true },
-  { key:"prawns",        label:"Prawns",         isMeat:true },
-  { key:"turkeyMince",   label:"Turkey Mince",   isMeat:true },
-  { key:"beef",          label:"Beef",           isMeat:true },
-  { key:"pork",          label:"Pork",           isMeat:true },
-  { key:"lamb",          label:"Lamb",           isMeat:true },
-  { key:"fish",          label:"Fish",           isMeat:true },
-  { key:"bacon",         label:"Bacon",          isMeat:true },
-  { key:"burgerBuns",    label:"Burger Buns",    isMeat:false },
-  { key:"hotDogBuns",    label:"Hot Dog Buns",   isMeat:false },
-  { key:"other",         label:"Other",          isMeat:false },
-];
+  
 const MEAT_LABELS = { none:"None", chicken:"Chicken", porkMince:"Pork Mince", sausages:"Sausages", prawns:"Prawns", turkeyMince:"Turkey Mince", beef:"Beef", pork:"Pork", lamb:"Lamb", fish:"Fish", bacon:"Bacon" };
 
   const processRecipe = async (source, imageBase64=null, mediaType=null) => {
