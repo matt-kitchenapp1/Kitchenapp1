@@ -88,9 +88,9 @@ const localCache = {
 const ALL_DAYS  = ["Monday","Tuesday","Wednesday","Thursday","Friday","Saturday","Sunday"];
 const WEEKDAYS  = ["Monday","Tuesday","Wednesday","Thursday","Friday"];
 const TIME_SLOTS= [
-  { label:"Quick",   sublabel:"< 30 min",    max:30,  color:"#4ade80" },
-  { label:"Medium",  sublabel:"30–45 min",   max:45,  color:"#fbbf24" },
-  { label:"Relaxed", sublabel:"Up to 1 hr+", max:120, color:"#f87171" },
+  { label:"Quick",   sublabel:"< 30 min",    min:0,  max:30,  color:"#4ade80" },
+  { label:"Medium",  sublabel:"30–45 min",   min:30, max:45,  color:"#fbbf24" },
+  { label:"Relaxed", sublabel:"45 min+",     min:45, max:999, color:"#f87171" },
 ];
 const SUITABILITY = [
   { key:"yes", label:"✓ Loves it",    color:"#4ade80", bg:"#052e16" },
@@ -578,10 +578,17 @@ function PlannerTab({ recipes, family, prefs, freezer, freezerIngredients, showT
         // slots is now an array; fall back to single string for old data
         const rawSlots = localSchedule[day];
         const slots = Array.isArray(rawSlots) ? rawSlots : (rawSlots ? [rawSlots] : []);
-        const maxTime = slots.length>0 ? Math.max(...slots.map(s=>TIME_SLOTS.find(t=>t.label===s)?.max||30)) : 120;
+        const maxTime = slots.length>0 ? Math.max(...slots.map(s=>TIME_SLOTS.find(t=>t.label===s)?.max||999)) : 999;
+        const minTime = slots.length>0 ? Math.min(...slots.map(s=>TIME_SLOTS.find(t=>t.label===s)?.min||0)) : 0;
         const eating  = localDiners[day]||family.map(m=>m.id);
         const nobodyEating = eating.length===0;
-        const eligible= nobodyEating ? [] : recipes.filter(r=>eating.every(mid=>(r.suitability?.[mid]||"yes")!=="no"));
+        const eligible= nobodyEating ? [] : recipes.filter(r=>{
+          if (!eating.every(mid=>(r.suitability?.[mid]||"yes")!=="no")) return false;
+          if (slots.length===0) return true;
+          const ct = r.cookTime||30;
+          // Recipe must fall within at least one selected time band
+          return slots.some(s=>{ const ts=TIME_SLOTS.find(t=>t.label===s); return ts && ct>=ts.min && ct<=ts.max; });
+        });
         const schoolMeal = WEEKDAYS.includes(day)?(localSchool[day]||""):"";
         return { day, slots, maxTime, eating, nobodyEating, eligible, schoolMeal };
       });
@@ -622,7 +629,7 @@ function PlannerTab({ recipes, family, prefs, freezer, freezerIngredients, showT
         const locked = d.nobodyEating
           ? `  *** NOBODY EATING — assign "—" to this day, no meal needed ***`
           : lockedMeals[d.day]?`  *** LOCKED MEAL: "${lockedMeals[d.day]}" — do not change this day ***`:"";
-        return `${d.day} [UP TO ${d.maxTime}min — any shorter meal is fine too, eating:${eatingNames}]:\n${locked}\n${schoolNote}\n${names||"  (no suitable recipes)"}`;
+        return `${d.day} [Time bands: ${d.slots.length>0?d.slots.join(" or "):"any"} — eating:${eatingNames}]:\n${locked}\n${schoolNote}\n${names||"  (no suitable recipes)"}`;
       }).join("\n\n");
       const dayKeys = DAYS.map(d=>d.toLowerCase());
       const freezerIngPlanned = freezerIngredients.length>0||freezer.filter(i=>!i.isIngredient).length>0;
@@ -735,8 +742,8 @@ function PlannerTab({ recipes, family, prefs, freezer, freezerIngredients, showT
                     const rawSlots = localSchedule[day];
                     const selected = Array.isArray(rawSlots) ? rawSlots : (rawSlots ? [rawSlots] : []);
                     if (selected.length===0) return null;
-                    const maxTime = Math.max(...selected.map(s=>TIME_SLOTS.find(t=>t.label===s)?.max||30));
-                    return <p style={{fontSize:"0.72rem",color:"#666",margin:"0 0 0.6rem"}}>Any meal up to {maxTime} min</p>;
+                    const bandLabels = selected.map(s=>TIME_SLOTS.find(t=>t.label===s)?.sublabel).filter(Boolean);
+                    return <p style={{fontSize:"0.72rem",color:"#666",margin:"0 0 0.6rem"}}>Recipes: {bandLabels.join(" or ")}</p>;
                   })()}
                   <div style={{display:"flex",gap:"0.4rem",flexWrap:"wrap",alignItems:"center",marginBottom:"0.5rem"}}>
                     <span style={{fontSize:"0.75rem",color:"#666",marginRight:"0.25rem"}}>Eating:</span>
@@ -804,7 +811,7 @@ function PlannerTab({ recipes, family, prefs, freezer, freezerIngredients, showT
                   const meal=localPlan[day];
                   const rawSlots = localSchedule[day];
                   const slots = Array.isArray(rawSlots) ? rawSlots : (rawSlots ? [rawSlots] : []);
-                  const maxTime = slots.length>0 ? Math.max(...slots.map(s=>TIME_SLOTS.find(t=>t.label===s)?.max||30)) : null;
+                  const maxTime = slots.length>0 ? Math.max(...slots.map(s=>TIME_SLOTS.find(t=>t.label===s)?.max||999)) : null;
                   const eating=(localDiners[day]||family.map(m=>m.id)).map(id=>family.find(m=>m.id===id));
                   const school=WEEKDAYS.includes(day)&&localSchool[day];
                   const isOverriding = overrideDay===day;
