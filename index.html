@@ -375,6 +375,7 @@ function PlannerTab({ recipes, family, prefs, freezer, freezerIngredients, showT
   const [manualMealVal, setManualMealVal] = useState("");
   // lockedMeals: { Monday: "Specific meal name", ... } — set before generation
   const [lockedMeals, setLockedMeals] = useState(planData.lockedMeals||{});
+  const [extraDays, setExtraDays] = useState(planData.extraDays||[]);
   // freezerFlags: { Monday: { meat: false, other: false }, ... }
   const [freezerFlags, setFreezerFlags] = useState(planData.freezerFlags||{});
   // extraPeople: { Monday: 0, Tuesday: 2, … } — additional guests beyond the household
@@ -388,6 +389,7 @@ function PlannerTab({ recipes, family, prefs, freezer, freezerIngredients, showT
     setExtraPeople(planData.extraPeople||{});
     setFreezerFlags(planData.freezerFlags||{});
     setLockedMeals(planData.lockedMeals||{});
+    setExtraDays(planData.extraDays||[]);
     setStep(Object.keys(planData.plan||{}).length>0?"plan":"schedule");
   },[planData]);
 
@@ -396,7 +398,7 @@ function PlannerTab({ recipes, family, prefs, freezer, freezerIngredients, showT
     const hasData = Object.keys(localSchedule).length>0||Object.keys(localSchool).length>0||Object.keys(lockedMeals).length>0||Object.values(extraPeople).some(v=>v>0);
     if (!hasData) return;
     const timer = setTimeout(async()=>{
-      await savePlan({ plan:localPlan, schedule:localSchedule, diners:localDiners, schoolMeals:localSchool, extraPeople, freezerFlags, lockedMeals });
+      await savePlan({ plan:localPlan, schedule:localSchedule, diners:localDiners, schoolMeals:localSchool, extraPeople, freezerFlags, lockedMeals, extraDays });
     }, 800);
     return ()=>clearTimeout(timer);
   },[localSchedule, localDiners, localSchool, lockedMeals, extraPeople]);
@@ -483,6 +485,36 @@ function PlannerTab({ recipes, family, prefs, freezer, freezerIngredients, showT
       });
     });
 
+    // ── Step 2b: Remove ingredients covered by freezer ──────────────────
+    // For each day that has "meat in freezer" flagged, find the recipe's main meat
+    // ingredient and subtract from the accumulator
+    const chickenTypes = ["chickenBreast","chickenThigh","wholeChicken","chicken"];
+    Object.entries(freezerFlags||{}).forEach(([day, flags])=>{
+      if (!flags?.meat) return;
+      const meal = plan[day];
+      if (!meal||meal==="—"||meal.startsWith("🧊")) return;
+      const r = recipes.find(rec=>meal.toLowerCase().includes(rec.name.toLowerCase())||rec.name.toLowerCase().includes(meal.toLowerCase()));
+      if (!r||!r.mainMeat||r.mainMeat==="none") return;
+      // Find the matching freezer ingredient
+      const fi = freezerIngredients.find(fi=>fi.ingType===r.mainMeat);
+      if (!fi) return;
+      // Remove main meat ingredient from accumulator for this recipe
+      // Find keys in accumulator that look like this recipe's meat ingredient
+      const meatKeywords = [r.mainMeat.toLowerCase(), fi.label.toLowerCase()];
+      if (chickenTypes.includes(r.mainMeat)) meatKeywords.push("chicken");
+      Object.keys(accumulator).forEach(k=>{
+        if (meatKeywords.some(kw=>k.includes(kw.replace(/\s+/g,""))||k.includes(kw.split(" ")[0]))) {
+          // Reduce by one serving worth
+          const days = DAYS.filter(d=>plan[d]&&(plan[d].toLowerCase().includes(r.name.toLowerCase())||r.name.toLowerCase().includes(plan[d].toLowerCase())));
+          if (days.length>0) {
+            const factor = 1/days.length;
+            accumulator[k].qty -= accumulator[k].qty*factor;
+            if (accumulator[k].qty<=0.01) delete accumulator[k];
+          }
+        }
+      });
+    });
+
     // ── Step 3: Format consolidated ingredients ───────────────────────────
     const consolidated = Object.values(accumulator).map(({qty, unit, base, original})=>{
       let text;
@@ -491,28 +523,17 @@ function PlannerTab({ recipes, family, prefs, freezer, freezerIngredients, showT
       return { text, section: classifyItem(text) };
     });
 
-    // ── Step 4: Sort by shopping categories ──────────────────────────────
-    // categories comes from the outer scope via closure
+    // ── Step 4: Sort by user's shopping categories order ────────────────
     const getCategoryOrder = (item) => {
       const lowerText = item.text.toLowerCase();
-      // Try to match against category names (rough keyword matching)
-      const categoryKeywords = {
-        0: ['apple','banana','grape','berry','berries','lemon','lime','orange','mango','pear','peach','tomato','tomatoes','onion','garlic','carrot','courgette','pepper','aubergine','spinach','lettuce','salad','herb','basil','parsley','coriander','ginger','leek','celery','spring onion','broccoli','cauliflower','pea','bean','sweetcorn','mushroom','avocado','cucumber','rocket','watercress','kale'],
-        1: ['chicken','beef','pork','lamb','turkey','fish','tuna','salmon','prawn','sausage','chorizo','mince','bacon','steak','fillet','breast','thigh','medallion'],
-        2: ['milk','cream','yoghurt','butter','egg','cheese','feta','parmesan','mozzarella'],
-        3: ['bread','bun','baguette','ciabatta','pitta','wrap','tortilla','roll','brioche'],
-        4: ['tin','can','jar','passata','tomato','stock pot','coconut milk','chickpea','kidney bean','lentil','olive','pesto'],
-        5: ['rice','pasta','noodle','flour','bulgur','couscous','oat','lentil','sugar','salt','pepper','spice','paprika','cumin','oregano','herb','oil','vinegar','sauce','ketchup','mustard','soy','honey','cornflour'],
-        6: ['juice','water','stock','wine','beer','milk'],
-        7: ['crisp','biscuit','chocolate','nut','peanut','almond','seed'],
-        8: ['frozen'],
-        9: ['washing','cleaning','detergent','bleach','spray'],
-      };
-      // Check each category's keywords
-      for (const [catIdx, keywords] of Object.entries(categoryKeywords)) {
-        if (keywords.some(kw => lowerText.includes(kw))) return parseInt(catIdx);
+      // Match against the user's category names (from settings)
+      for (let i=0; i<categories.length; i++) {
+        const catName = categories[i].toLowerCase();
+        // Check if any word in the category name appears in the item text
+        const words = catName.split(/\s+/).filter(w=>w.length>2);
+        if (words.some(w=>lowerText.includes(w))) return i;
       }
-      return 999; // Other / uncategorised
+      return 999;
     };
 
     consolidated.sort((a,b) => getCategoryOrder(a) - getCategoryOrder(b));
@@ -550,7 +571,7 @@ function PlannerTab({ recipes, family, prefs, freezer, freezerIngredients, showT
     setLocalPlan(newPlan);
     setOverrideDay(null);
     setManualMealVal("");
-    const newPlanData = { plan:newPlan, schedule:localSchedule, diners:localDiners, schoolMeals:localSchool, extraPeople, freezerFlags, lockedMeals };
+    const newPlanData = { plan:newPlan, schedule:localSchedule, diners:localDiners, schoolMeals:localSchool, extraPeople, freezerFlags, lockedMeals, extraDays };
     await savePlan(newPlanData);
     showToast("Meal updated ✓ — tap 'Build Shopping List' when ready");
     setOverrideUpdating(false);
@@ -789,6 +810,39 @@ function PlannerTab({ recipes, family, prefs, freezer, freezerIngredients, showT
               );
             })}
           </div>
+
+          {/* Extra days */}
+          {extraDays.map((extraDay,ei)=>(
+            <div key={"extra"+ei} style={{...S.card,borderColor:"#2a3a2a",marginBottom:"0.75rem"}}>
+              <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:"0.75rem"}}>
+                <select value={extraDay.name||""} onChange={e=>{
+                  const updated=[...extraDays]; updated[ei]={...updated[ei],name:e.target.value}; setExtraDays(updated);
+                }} style={{...S.input,marginBottom:0,flex:1,marginRight:"0.5rem"}}>
+                  <option value="">— Choose extra day —</option>
+                  {["Monday","Tuesday","Wednesday","Thursday","Friday","Saturday","Sunday"].filter(d=>!DAYS.includes(d)).map(d=><option key={d} value={d}>{d}</option>)}
+                </select>
+                <button onClick={()=>setExtraDays(extraDays.filter((_,i)=>i!==ei))}
+                  style={{...S.smallBtn,color:"#f87171",borderColor:"#f87171",background:"transparent",flexShrink:0}}>Remove</button>
+              </div>
+              <div style={{display:"flex",gap:"0.35rem",flexWrap:"wrap"}}>
+                {TIME_SLOTS.map(slot=>{
+                  const key="extra_"+ei;
+                  const sel=(localSchedule[key]||[]).includes(slot.label);
+                  return <button key={slot.label} onClick={()=>{
+                    const cur=localSchedule[key]||[];
+                    setLocalSchedule(p=>({...p,[key]:sel?cur.filter(s=>s!==slot.label):[...cur,slot.label]}));
+                  }} style={{padding:"0.3rem 0.75rem",borderRadius:"8px",fontSize:"0.82rem",cursor:"pointer",fontFamily:"inherit",border:"1px solid",borderColor:sel?slot.color:"#333",background:sel?slot.color+"22":"transparent",color:sel?slot.color:"#555",fontWeight:sel?"600":"400"}}>
+                    {slot.label}<br/><span style={{fontSize:"0.68rem",opacity:0.8}}>{slot.sublabel}</span>
+                  </button>;
+                })}
+              </div>
+            </div>
+          ))}
+          <button onClick={()=>setExtraDays([...extraDays,{name:""}])}
+            style={{...S.editTimeBtn,color:"#4ade80",borderColor:"#4ade80",marginBottom:"1rem",display:"block",width:"100%",textAlign:"center"}}>
+            + Add extra day to plan
+          </button>
+
           <button onClick={generatePlan} disabled={generating||recipes.length===0} style={S.primaryBtn}>
             {generating?"Generating…":"✨ Generate Plan"}
           </button>
@@ -1050,6 +1104,7 @@ function ShoppingTab({ shopping, saveShopping, favourites, saveFavourites, itemP
   const addFavToList = async fav => {
     if(shopping.some(i=>i.text.toLowerCase()===fav.text.toLowerCase()&&!i.checked)){ showToast("Already on the list!","#fbbf24"); return; }
     await addItem(fav.text);
+    showToast(fav.text+" added to list ✓","#4ade80");
   };
 
   const sections = [
