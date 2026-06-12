@@ -236,6 +236,31 @@ function App() {
       setLoading(false);
     }
     load();
+
+    // Poll Supabase every 30s to sync changes from other devices
+    const pollInterval = setInterval(async () => {
+      try {
+        const [r,cp,up,sh,fa,fr,pr,ip,ws,pa,ca,ro] = await Promise.all([
+          tryGet(RECIPES_KEY), tryGet(CURRENT_PLAN_KEY), tryGet(UPCOMING_PLAN_KEY),
+          tryGet(SHOPPING_KEY), tryGet(FAVOURITES_KEY), tryGet(FREEZER_KEY),
+          tryGet(PREFS_KEY), tryGet(ITEM_PREFS_KEY), tryGet(WEEK_START_KEY),
+          tryGet(PANTRY_KEY), tryGet(CATEGORIES_KEY), tryGet(RULE_ORDER_KEY),
+        ]);
+        if (r)  setRecipes(r);
+        if (cp) setCurrentPlan(cp);
+        if (up) setUpcomingPlan(up);
+        if (sh) setShopping(sh);
+        if (fa) setFavourites(fa);
+        if (fr) setFreezer(fr);
+        if (pr) setPrefs({...DEFAULT_PREFS,...pr});
+        if (ip) setItemPrefs(ip);
+        if (ws) setWeekStart(ws);
+        if (pa) setPantry(pa);
+        if (ca) setCategories(ca);
+        if (ro) setRuleOrder(ro);
+      } catch(e) {}
+    }, 30000);
+    return () => clearInterval(pollInterval);
   }, []);
 
   const persist     = async (key, val) => { await storage.set(key, JSON.stringify(val)); localCache.set(key, JSON.stringify(val)); };
@@ -306,7 +331,21 @@ function App() {
     ["shopping","🛒 Shopping"],["freezer","🧊 Freezer"],["family","👨‍👩‍👧 Family"],["prefs","⚙️ Settings"],
   ];
   const freezerIngredients = freezer.filter(i=>i.isIngredient);
+  // For next week planning, subtract freezer ingredients already used in current week
+  const currentWeekFreezerUsed = {};
+  Object.values(currentPlan.plan||{}).forEach(meal=>{
+    if (!meal||meal==="—") return;
+    const r = recipes.find(rec=>meal.toLowerCase().includes(rec.name.toLowerCase())||rec.name.toLowerCase().includes(meal.toLowerCase()));
+    if (r?.mainMeat && r.mainMeat!=="none") {
+      currentWeekFreezerUsed[r.mainMeat] = (currentWeekFreezerUsed[r.mainMeat]||0) + 1;
+    }
+  });
+  const freezerIngredientsRemaining = freezerIngredients.map(fi=>({
+    ...fi,
+    qty: Math.max(0, (fi.qty||1) - (currentWeekFreezerUsed[fi.ingType]||0))
+  })).filter(fi=>fi.qty>0);
   const planProps = { recipes, family, prefs, freezer, freezerIngredients, showToast, DAYS, classifyItem, filterPantry, ruleOrder };
+  const upcomingPlanProps = { ...planProps, freezerIngredients: freezerIngredientsRemaining };
 
   return (
     <div style={S.app}>
@@ -349,7 +388,7 @@ function App() {
       </header>
       <main style={S.main}>
         {tab==="current"  && <PlannerTab {...planProps} planData={currentPlan} savePlan={saveCurrentPlan} saveShopping={saveShopping} isCurrentWeek={true} label="This Week"/>}
-        {tab==="upcoming" && <PlannerTab {...planProps} planData={upcomingPlan} savePlan={saveUpcomingPlan} saveShopping={saveShopping} isCurrentWeek={false} label="Next Week"
+        {tab==="upcoming" && <PlannerTab {...upcomingPlanProps} planData={upcomingPlan} savePlan={saveUpcomingPlan} saveShopping={saveShopping} isCurrentWeek={false} label="Next Week"
             onPromoteToCurrentWeek={async()=>{ await saveCurrentPlan(upcomingPlan); await saveUpcomingPlan({plan:{},schedule:{},diners:{},schoolMeals:{}}); setTab("current"); showToast("Moved to This Week ✓"); }}/>}
         {tab==="recipes"  && <RecipesTab recipes={recipes} saveRecipes={saveRecipes} family={family} showToast={showToast}/>}
         {tab==="shopping" && <ShoppingTab shopping={shopping} saveShopping={saveShopping} favourites={favourites} saveFavourites={saveFavourites} itemPrefs={itemPrefs} learnItemPref={learnItemPref} classifyItem={classifyItem} pantry={pantry} savePantry={savePantry} categories={categories} showToast={showToast}/>}
@@ -413,7 +452,7 @@ function PlannerTab({ recipes, family, prefs, freezer, freezerIngredients, showT
   };
 
   // Rebuild shopping list from a full plan, scaling for extra people per day
-  const rebuildShopping = async (plan, ep=extraPeople) => {
+  const rebuildShopping = async (plan, ep=extraPeople, flags=freezerFlags) => {
     const allMeals = Object.values(plan).filter(n=>n&&n!=="—"&&!n.startsWith("🧊"));
     const matched = recipes.filter(r=>allMeals.some(n=>n.toLowerCase().includes(r.name.toLowerCase())||r.name.toLowerCase().includes(n.toLowerCase())));
 
@@ -489,7 +528,7 @@ function PlannerTab({ recipes, family, prefs, freezer, freezerIngredients, showT
     // For each day that has "meat in freezer" flagged, find the recipe's main meat
     // ingredient and subtract from the accumulator
     const chickenTypes = ["chickenBreast","chickenThigh","wholeChicken","chicken"];
-    Object.entries(freezerFlags||{}).forEach(([day, flags])=>{
+    Object.entries(flags||{}).forEach(([day, flags])=>{
       if (!flags?.meat) return;
       const meal = plan[day];
       if (!meal||meal==="—"||meal.startsWith("🧊")) return;
@@ -1001,7 +1040,7 @@ function PlannerTab({ recipes, family, prefs, freezer, freezerIngredients, showT
                 })}
               </div>
               <div style={{display:"flex",gap:"0.5rem",flexWrap:"wrap",marginBottom:"0.75rem"}}>
-                <button onClick={async()=>{ await rebuildShopping(localPlan); showToast("Shopping list built ✓"); }}
+                <button onClick={async()=>{ await rebuildShopping(localPlan, extraPeople, freezerFlags); showToast("Shopping list built ✓"); }}
                   style={{...S.primaryBtn, background:"#1a3a1a", color:"#4ade80", border:"1px solid #4ade80"}}>
                   🛒 Build Shopping List
                 </button>
