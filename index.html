@@ -415,12 +415,14 @@ function PlannerTab({ recipes, family, prefs, freezer, freezerIngredients, showT
   // lockedMeals: { Monday: "Specific meal name", ... } — set before generation
   const [lockedMeals, setLockedMeals] = useState(planData.lockedMeals||{});
   const [extraDays, setExtraDays] = useState(planData.extraDays||[]);
+  const isSyncingRef = useRef(false);
   // freezerFlags: { Monday: { meat: false, other: false }, ... }
   const [freezerFlags, setFreezerFlags] = useState(planData.freezerFlags||{});
   // extraPeople: { Monday: 0, Tuesday: 2, … } — additional guests beyond the household
   const [extraPeople, setExtraPeople]     = useState(planData.extraPeople||{});
 
   useEffect(()=>{
+    isSyncingRef.current = true;
     setLocalSchedule(planData.schedule||{});
     setLocalDiners(()=>{ const d={}; DAYS.forEach(day=>{d[day]=(planData.diners||{})[day]||family.map(m=>m.id);}); return d; });
     setLocalSchool(planData.schoolMeals||{});
@@ -429,15 +431,19 @@ function PlannerTab({ recipes, family, prefs, freezer, freezerIngredients, showT
     setFreezerFlags(planData.freezerFlags||{});
     setLockedMeals(planData.lockedMeals||{});
     setExtraDays(planData.extraDays||[]);
-    setStep(Object.keys(planData.plan||{}).length>0?"plan":"schedule");
+    setStep(prevStep => Object.keys(planData.plan||{}).length>0 && prevStep!=="schedule" ? "plan" : prevStep);
+    // Allow auto-save again shortly after this sync completes
+    const t = setTimeout(()=>{ isSyncingRef.current = false; }, 200);
+    return ()=>clearTimeout(t);
   },[planData]);
 
   // Auto-save schedule inputs 0.8s after the user stops making changes
   useEffect(()=>{
+    if (isSyncingRef.current) return; // don't save right after an incoming sync — avoids overwriting other device's changes
     const hasData = Object.keys(localSchedule).length>0||Object.keys(localSchool).length>0||Object.keys(lockedMeals).length>0||Object.values(extraPeople).some(v=>v>0);
     if (!hasData) return;
     const timer = setTimeout(async()=>{
-      await savePlan({ plan:localPlan, schedule:localSchedule, diners:localDiners, schoolMeals:localSchool, extraPeople, freezerFlags, lockedMeals, extraDays });
+      await savePlan({ plan:localPlan, schedule:localSchedule, diners:localDiners, schoolMeals:localSchool, extraPeople, freezerFlags, lockedMeals, extraDays, weekDate });
     }, 800);
     return ()=>clearTimeout(timer);
   },[localSchedule, localDiners, localSchool, lockedMeals, extraPeople]);
@@ -610,7 +616,7 @@ function PlannerTab({ recipes, family, prefs, freezer, freezerIngredients, showT
     setLocalPlan(newPlan);
     setOverrideDay(null);
     setManualMealVal("");
-    const newPlanData = { plan:newPlan, schedule:localSchedule, diners:localDiners, schoolMeals:localSchool, extraPeople, freezerFlags, lockedMeals, extraDays };
+    const newPlanData = { plan:newPlan, schedule:localSchedule, diners:localDiners, schoolMeals:localSchool, extraPeople, freezerFlags, lockedMeals, extraDays, weekDate };
     await savePlan(newPlanData);
     showToast("Meal updated ✓ — tap 'Build Shopping List' when ready");
     setOverrideUpdating(false);
@@ -623,7 +629,7 @@ function PlannerTab({ recipes, family, prefs, freezer, freezerIngredients, showT
     setExtraPeople(updated);
     // Persist and rebuild shopping if plan exists
     if (Object.keys(localPlan).length>0) {
-      const newPlanData = { plan:localPlan, schedule:localSchedule, diners:localDiners, schoolMeals:localSchool, extraPeople:updated };
+      const newPlanData = { plan:localPlan, schedule:localSchedule, diners:localDiners, schoolMeals:localSchool, extraPeople:updated, freezerFlags, lockedMeals, extraDays, weekDate };
       await savePlan(newPlanData);
       if (n>0) showToast(`+${n} guest${n>1?"s":""} — shopping list updated`);
     }
@@ -743,7 +749,7 @@ function PlannerTab({ recipes, family, prefs, freezer, freezerIngredients, showT
       const previousWeekMeals = !isCurrentWeek
         ? [] // upcoming plan doesn't need to track its own prev week here; that comes from current
         : Object.values(normalised).filter(n=>n&&n!=="—"&&!n.startsWith("🧊"));
-      const newPlanData = { plan:normalised, schedule:localSchedule, diners:localDiners, schoolMeals:localSchool, previousWeekMeals, extraPeople, freezerFlags:updatedFreezerFlags, lockedMeals };
+      const newPlanData = { plan:normalised, schedule:localSchedule, diners:localDiners, schoolMeals:localSchool, previousWeekMeals, extraPeople, freezerFlags:updatedFreezerFlags, lockedMeals, extraDays, weekDate };
       await savePlan(newPlanData);
       setLocalPlan(normalised);
       setStep("plan"); showToast(`${label} plan generated ✓ — tap 'Build Shopping List' when ready`);
@@ -756,10 +762,70 @@ function PlannerTab({ recipes, family, prefs, freezer, freezerIngredients, showT
     await savePlan(empty); setLocalPlan({}); setStep("schedule");
   };
 
+  // Week commencing date — auto-calculated from weekStart day, with manual override stored in plan data
+  const [weekDate, setWeekDate] = useState(planData.weekDate||"");
+  const [editingDate, setEditingDate] = useState(false);
+
+  const computeAutoWeekDate = () => {
+    // Find the next (or current) occurrence of DAYS[0] (the week-start day name)
+    const dayNames = ["Sunday","Monday","Tuesday","Wednesday","Thursday","Friday","Saturday"];
+    const targetDayName = DAYS[0];
+    const targetIdx = dayNames.indexOf(targetDayName);
+    const today = new Date();
+    const todayIdx = today.getDay();
+    let diff = targetIdx - todayIdx;
+    if (!isCurrentWeek) {
+      // Next week tab — push forward 7 days from this week's occurrence
+      diff = diff < 0 ? diff + 7 : diff;
+      diff += 7;
+    } else {
+      // This week tab — most recent or today occurrence (not future) unless plan is for the upcoming week start
+      if (diff < 0) diff += 7;
+    }
+    const d = new Date(today);
+    d.setDate(today.getDate()+diff);
+    return d;
+  };
+
+  useEffect(()=>{
+    if (!planData.weekDate) {
+      const auto = computeAutoWeekDate();
+      const iso = auto.toISOString().slice(0,10);
+      setWeekDate(iso);
+    } else {
+      setWeekDate(planData.weekDate);
+    }
+  },[planData.weekDate, isCurrentWeek]);
+
+  const formatDisplayDate = (iso) => {
+    if (!iso) return "";
+    const d = new Date(iso+"T00:00:00");
+    return d.toLocaleDateString("en-GB",{ day:"numeric", month:"short", year:"numeric" });
+  };
+
+  const saveWeekDate = async (newDate) => {
+    setWeekDate(newDate);
+    await savePlan({ plan:localPlan, schedule:localSchedule, diners:localDiners, schoolMeals:localSchool, extraPeople, freezerFlags, lockedMeals, extraDays, weekDate:newDate });
+  };
+
   return (
     <div>
       <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:"1.25rem",flexWrap:"wrap",gap:"0.5rem"}}>
-        <h2 style={{margin:0,fontFamily:"'Playfair Display',serif",fontWeight:"400",fontSize:"1.3rem",color:"#f5f0e8"}}>{label}</h2>
+        <div style={{display:"flex",alignItems:"baseline",gap:"0.6rem",flexWrap:"wrap"}}>
+          <h2 style={{margin:0,fontFamily:"'Playfair Display',serif",fontWeight:"400",fontSize:"1.3rem",color:"#f5f0e8"}}>{label}</h2>
+          {editingDate ? (
+            <div style={{display:"flex",gap:"0.3rem",alignItems:"center"}}>
+              <input type="date" value={weekDate} onChange={e=>setWeekDate(e.target.value)}
+                style={{...S.input,marginBottom:0,fontSize:"0.78rem",padding:"0.25rem 0.5rem",width:"auto"}}/>
+              <button onClick={async()=>{ await saveWeekDate(weekDate); setEditingDate(false); }} style={S.smallBtn}>Save</button>
+              <button onClick={()=>setEditingDate(false)} style={{...S.smallBtn,background:"#333",color:"#aaa"}}>✕</button>
+            </div>
+          ) : (
+            <span onClick={()=>setEditingDate(true)} style={{color:"#c9a84c",fontSize:"0.85rem",cursor:"pointer",borderBottom:"1px dashed #555",paddingBottom:"1px"}}>
+              w/c {formatDisplayDate(weekDate)} ✏️
+            </span>
+          )}
+        </div>
         {!isCurrentWeek && Object.keys(localPlan).length>0 && onPromoteToCurrentWeek && (
           <button onClick={onPromoteToCurrentWeek} style={{...S.smallBtn,background:"#1a2e1a",color:"#4ade80",border:"1px solid #4ade80"}}>→ Move to This Week</button>
         )}
