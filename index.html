@@ -568,30 +568,32 @@ function PlannerTab({ recipes, family, prefs, freezer, freezerIngredients, showT
       return { text, section: classifyItem(text) };
     });
 
-    // ── Step 4: Sort by user's shopping categories order, then favourites order ──
+    // ── Step 4: Sort by favourites order (primary), then category (fallback) ──
+    const normaliseText = (t) => t.toLowerCase().replace(/[^a-z0-9\s]/g," ").replace(/\b\d+(\.\d+)?\b/g,"").replace(/\s+/g," ").trim();
     const getCategoryOrder = (item) => {
       const lowerText = item.text.toLowerCase();
-      // Match against the user's category names (from settings)
       for (let i=0; i<categories.length; i++) {
         const catName = categories[i].toLowerCase();
-        // Check if any word in the category name appears in the item text
         const words = catName.split(/\s+/).filter(w=>w.length>2);
         if (words.some(w=>lowerText.includes(w))) return i;
       }
       return 999;
     };
     const getFavouriteOrder = (item) => {
-      if (!favourites||favourites.length===0) return 999;
-      const lowerText = item.text.toLowerCase();
-      const idx = favourites.findIndex(f=>lowerText.includes(f.text.toLowerCase())||f.text.toLowerCase().includes(lowerText));
-      return idx===-1 ? 999 : idx;
+      if (!favourites||favourites.length===0) return -1; // no favourites at all — don't affect sort
+      const itemNorm = normaliseText(item.text);
+      let bestIdx = -1, bestScore = 0;
+      favourites.forEach((f,idx)=>{
+        const favNorm = normaliseText(f.text);
+        if (!favNorm) return;
+        // Match if the favourite's words are fully contained in the item, or vice versa
+        if (itemNorm.includes(favNorm) || favNorm.includes(itemNorm)) {
+          const score = favNorm.length; // prefer the longest/most specific match
+          if (score>bestScore) { bestScore=score; bestIdx=idx; }
+        }
+      });
+      return bestIdx;
     };
-
-    consolidated.sort((a,b) => {
-      const catDiff = getCategoryOrder(a) - getCategoryOrder(b);
-      if (catDiff!==0) return catDiff;
-      return getFavouriteOrder(a) - getFavouriteOrder(b);
-    });
 
     // ── Step 4b: Add still-need-to-buy ingredients for freezer batch meals ──
     Object.values(plan).forEach(mealName=>{
@@ -603,9 +605,17 @@ function PlannerTab({ recipes, family, prefs, freezer, freezerIngredients, showT
       recipe.stillNeedToBuy.forEach(ingIdx=>{
         const ing = (recipe.ingredients||[])[ingIdx];
         if (!ing) return;
-        // Add directly to consolidated so it appears in the shopping list
         consolidated.push({ text:ing.trim(), section:classifyItem(ing.trim()) });
       });
+    });
+
+    // ── Step 4c: Sort by favourites order (primary), then category (fallback) ──
+    consolidated.sort((a,b) => {
+      const favA = getFavouriteOrder(a), favB = getFavouriteOrder(b);
+      if (favA!==-1 && favB!==-1) return favA - favB;
+      if (favA!==-1) return -1;
+      if (favB!==-1) return 1;
+      return getCategoryOrder(a) - getCategoryOrder(b);
     });
 
     // ── Step 5: Build final shopping items ────────────────────────────────
@@ -813,6 +823,16 @@ function PlannerTab({ recipes, family, prefs, freezer, freezerIngredients, showT
     return d.toLocaleDateString("en-GB",{ day:"numeric", month:"short", year:"numeric" });
   };
 
+  // Get the date for a specific day, based on its position in DAYS relative to weekDate
+  const getDateForDay = (day) => {
+    if (!weekDate) return "";
+    const idx = DAYS.indexOf(day);
+    if (idx===-1) return "";
+    const d = new Date(weekDate+"T00:00:00");
+    d.setDate(d.getDate()+idx);
+    return d.toLocaleDateString("en-GB",{ day:"numeric", month:"short" });
+  };
+
   const saveWeekDate = async (newDate) => {
     setWeekDate(newDate);
     await savePlan({ plan:localPlan, schedule:localSchedule, diners:localDiners, schoolMeals:localSchool, extraPeople, freezerFlags, lockedMeals, extraDays, weekDate:newDate });
@@ -855,7 +875,7 @@ function PlannerTab({ recipes, family, prefs, freezer, freezerIngredients, showT
               const isWeekday=WEEKDAYS.includes(day);
               return (
                 <div key={day} style={{...S.card,padding:"1rem"}}>
-                  <div style={{fontWeight:"600",color:"#c9a84c",marginBottom:"0.6rem"}}>{day}</div>
+                  <div style={{fontWeight:"600",color:"#c9a84c",marginBottom:"0.6rem"}}>{day} <span style={{color:"#777",fontSize:"0.78rem",fontWeight:"400"}}>{getDateForDay(day)}</span></div>
                   <div style={{display:"flex",gap:"0.35rem",flexWrap:"wrap",marginBottom:"0.5rem"}}>
                     {TIME_SLOTS.map(slot=>{
                       const rawSlots = localSchedule[day];
@@ -990,7 +1010,7 @@ function PlannerTab({ recipes, family, prefs, freezer, freezerIngredients, showT
                       {/* Main row */}
                       <div style={{display:"flex",alignItems:"center",gap:"0.75rem",padding:"0.85rem 1rem"}}>
                         <div style={{minWidth:"85px"}}>
-                          <div style={{fontWeight:"600",color:"#c9a84c",fontSize:"0.9rem"}}>{day}</div>
+                          <div style={{fontWeight:"600",color:"#c9a84c",fontSize:"0.9rem"}}>{day} <span style={{color:"#777",fontSize:"0.76rem",fontWeight:"400"}}>{getDateForDay(day)}</span></div>
                           {slots.length>0&&(
                             <div style={{display:"flex",gap:"0.2rem",flexWrap:"wrap",marginTop:"0.2rem"}}>
                               {slots.sort((a,b)=>TIME_SLOTS.findIndex(t=>t.label===a)-TIME_SLOTS.findIndex(t=>t.label===b)).map(s=>{
