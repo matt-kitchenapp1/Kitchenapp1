@@ -135,6 +135,17 @@ const ALL_BUILTIN_RULES = [
   { key:"freezerTowardEndOfWeek",   label:"Plan freezer meals towards end of week",           icon:"📅" },
 ];
 const DEFAULT_CATEGORIES = ["Fruit & Veg","Meat & Fish","Dairy","Bakery","Tins & Jars","Dry Goods","Drinks","Snacks","Frozen","Cleaning","Other"];
+// Shared helper — removes duplicate favourites (same text+category), keeping first occurrence
+function dedupeFavourites(favs) {
+  if (!favs||!Array.isArray(favs)) return favs;
+  const seen = new Set();
+  const result = [];
+  favs.forEach(f=>{
+    const key = (f.text||"").toLowerCase().trim()+"|"+(f.category||"");
+    if (!seen.has(key)) { seen.add(key); result.push(f); }
+  });
+  return result;
+}
 const FREEZER_INGREDIENT_TYPES = [
   { key:"chickenBreast",  label:"Chicken Breast",  isMeat:true },
   { key:"chickenThigh",   label:"Chicken Thigh",   isMeat:true },
@@ -224,7 +235,7 @@ function App() {
       const fr = await tryGet(FREEZER_KEY);      if (fr) setFreezer(fr);
       const p  = await tryGet(PREFS_KEY);        if (p)  setPrefs({...DEFAULT_PREFS,...p, customRules: p.customRules||[]});
       const s  = await tryGet(SHOPPING_KEY);     if (s)  setShopping(s);
-      const fv = await tryGet(FAVOURITES_KEY);   if (fv) setFavourites(fv);
+      const fv = await tryGet(FAVOURITES_KEY);   if (fv) setFavourites(dedupeFavourites(fv));
       const ip = await tryGet(ITEM_PREFS_KEY);   if (ip) setItemPrefs(ip);
       const ws = await tryGet(WEEK_START_KEY);   if (ws) setWeekStart(ws);
       const cp = await tryGet(CURRENT_PLAN_KEY); if (cp) setCurrentPlan(cp);
@@ -250,7 +261,7 @@ function App() {
         if (cp) setCurrentPlan(cp);
         if (up) setUpcomingPlan(up);
         if (sh) setShopping(sh);
-        if (fa) setFavourites(fa);
+        if (fa) setFavourites(dedupeFavourites(fa));
         if (fr) setFreezer(fr);
         if (pr) setPrefs({...DEFAULT_PREFS,...pr});
         if (ip) setItemPrefs(ip);
@@ -617,10 +628,6 @@ function PlannerTab({ recipes, family, prefs, freezer, freezerIngredients, showT
       if (favB!==-1) return 1;
       return getCategoryOrder(a) - getCategoryOrder(b);
     });
-    console.log("=== rebuildShopping DEBUG ===");
-    console.log("favourites count at sort time:", favourites?.length);
-    console.log("first 10 favourites:", favourites?.slice(0,10).map(f=>f.text));
-    console.log("consolidated after sort:", consolidated.map(c=>c.text));
 
     // ── Step 5: Build final shopping items ────────────────────────────────
     const raw = consolidated.map(({text, section})=>({
@@ -1144,12 +1151,6 @@ function PlannerTab({ recipes, family, prefs, freezer, freezerIngredients, showT
                   style={{...S.primaryBtn, background:"#1a3a1a", color:"#4ade80", border:"1px solid #4ade80"}}>
                   🛒 Build Shopping List
                 </button>
-                <button onClick={()=>{
-                  console.log("=== DEBUG: favourites array ===", JSON.stringify(favourites));
-                  console.log("=== DEBUG: favourites.length ===", favourites.length);
-                  const sample = favourites.slice(0,5).map(f=>f.text).join(", ");
-                  showToast("Favourites ("+favourites.length+"): "+sample, "#60a5fa");
-                }} style={{...S.smallBtn,background:"transparent",color:"#60a5fa",border:"1px solid #60a5fa"}}>🔍 Debug Favs</button>
                 <button onClick={()=>setStep("schedule")} style={{...S.primaryBtn,background:"#2a2a2a",color:"#aaa"}}>Regenerate</button>
                 <button onClick={clearPlan} style={{...S.smallBtn,background:"transparent",color:"#f87171",border:"1px solid #f87171"}}>Clear</button>
               </div>
@@ -1164,6 +1165,7 @@ function PlannerTab({ recipes, family, prefs, freezer, freezerIngredients, showT
 
 // ── Shopping Tab ──────────────────────────────────────────────────────────
 function ShoppingTab({ shopping, saveShopping, favourites, saveFavourites, itemPrefs, learnItemPref, classifyItem, pantry, savePantry, categories, showToast }) {
+  const dedupeFavs = dedupeFavourites;
   const [newItem, setNewItem]       = useState("");
   const [section, setSection]       = useState("all");
   const [showFavs, setShowFavs]     = useState(false);
@@ -1242,7 +1244,8 @@ function ShoppingTab({ shopping, saveShopping, favourites, saveFavourites, itemP
 
   const addFav = async () => {
     if(!newFav.trim()) return;
-    await saveFavourites([...favourites,{id:Date.now().toString(),text:newFav.trim(),category:favCategory}]);
+    const deduped = dedupeFavs(favourites);
+    await saveFavourites([...deduped,{id:Date.now().toString(),text:newFav.trim(),category:favCategory}]);
     setNewFav(""); showToast("Favourite saved ✓");
   };
   const removeFav = async id => { await saveFavourites(favourites.filter(f=>f.id!==id)); };
@@ -1307,7 +1310,17 @@ function ShoppingTab({ shopping, saveShopping, favourites, saveFavourites, itemP
       </button>
       {showFavs&&(
         <div style={{...S.card,marginBottom:"1rem"}}>
-          <h3 style={{...S.sectionHead,marginTop:0}}>Favourites</h3>
+          <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:"0.5rem"}}>
+            <h3 style={{...S.sectionHead,margin:0}}>Favourites ({favourites.length})</h3>
+            <button onClick={async()=>{
+              const deduped = dedupeFavs(favourites);
+              const removed = favourites.length - deduped.length;
+              await saveFavourites(deduped);
+              showToast(removed>0 ? `Removed ${removed} duplicate(s) ✓` : "No duplicates found","#4ade80");
+            }} style={{...S.smallBtn,background:"transparent",color:"#fbbf24",border:"1px solid #fbbf24",fontSize:"0.75rem"}}>
+              🧹 Clean up duplicates
+            </button>
+          </div>
           <div style={{display:"flex",gap:"0.5rem",marginBottom:"1rem",flexWrap:"wrap"}}>
             <input value={newFav} onChange={e=>setNewFav(e.target.value)} onKeyDown={e=>e.key==="Enter"&&addFav()}
               placeholder="New favourite…" style={{...S.input,flex:1,marginBottom:0,minWidth:"120px"}}/>
@@ -2074,7 +2087,7 @@ function SettingsTab({ prefs, savePrefs, weekStart, saveWeekStart, itemPrefs, sa
   return (
     <div>
       {/* Build version marker — for confirming the latest deploy is live */}
-      <p style={{color:"#444",fontSize:"0.68rem",margin:"0 0 0.75rem",textAlign:"right"}}>Build: 2026-06-27-debug-v3</p>
+      <p style={{color:"#444",fontSize:"0.68rem",margin:"0 0 0.75rem",textAlign:"right"}}>Build: 2026-06-27-dedupe-fix-v4</p>
       {/* Week start */}
       <div style={{...S.card,marginBottom:"1rem"}}>
         <label style={{color:"#a89f8c",fontSize:"0.82rem",letterSpacing:"0.08em",textTransform:"uppercase",display:"block",marginBottom:"0.75rem"}}>📅 Week starts on</label>
