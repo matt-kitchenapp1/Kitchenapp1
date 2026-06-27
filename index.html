@@ -1151,6 +1151,30 @@ function PlannerTab({ recipes, family, prefs, freezer, freezerIngredients, showT
                   style={{...S.primaryBtn, background:"#1a3a1a", color:"#4ade80", border:"1px solid #4ade80"}}>
                   🛒 Build Shopping List
                 </button>
+                <button onClick={()=>{
+                  const normaliseText = (t) => t.toLowerCase().replace(/[^a-z0-9\s]/g," ").replace(/\b\d+(\.\d+)?\b/g,"").replace(/\s+/g," ").trim();
+                  const lookup = (itemText) => {
+                    const itemNorm = normaliseText(itemText);
+                    let bestIdx = -1, bestScore = 0, bestFav = "", matches=[];
+                    favourites.forEach((f,idx)=>{
+                      const favNorm = normaliseText(f.text);
+                      if (!favNorm) return;
+                      if (itemNorm.includes(favNorm) || favNorm.includes(itemNorm)) {
+                        matches.push(idx+":"+f.text);
+                        const score = favNorm.length;
+                        if (score>bestScore) { bestScore=score; bestIdx=idx; bestFav=f.text; }
+                      }
+                    });
+                    return {idx:bestIdx, fav:bestFav, matches};
+                  };
+                  const milkResult = lookup("3 Semi-skimmed Milk");
+                  const chorizoResult = lookup("60 g chorizo");
+                  const milkFavIdx = favourites.findIndex(f=>f.text.toLowerCase().includes("milk"));
+                  const chorizoFavIdx = favourites.findIndex(f=>f.text.toLowerCase().includes("chorizo"));
+                  const msg = `Milk item→idx ${milkResult.idx} (matches: ${milkResult.matches.join("|")}) realMilkFavAt:${milkFavIdx} | Chorizo item→idx ${chorizoResult.idx} (matches: ${chorizoResult.matches.join("|")}) realChorizoFavAt:${chorizoFavIdx}`;
+                  console.log(msg);
+                  showToast(msg, "#60a5fa");
+                }} style={{...S.smallBtn,background:"transparent",color:"#60a5fa",border:"1px solid #60a5fa",fontSize:"0.68rem"}}>🔍 Test Milk/Chorizo</button>
                 <button onClick={()=>setStep("schedule")} style={{...S.primaryBtn,background:"#2a2a2a",color:"#aaa"}}>Regenerate</button>
                 <button onClick={clearPlan} style={{...S.smallBtn,background:"transparent",color:"#f87171",border:"1px solid #f87171"}}>Clear</button>
               </div>
@@ -2114,7 +2138,7 @@ function SettingsTab({ prefs, savePrefs, weekStart, saveWeekStart, itemPrefs, sa
   return (
     <div>
       {/* Build version marker — for confirming the latest deploy is live */}
-      <p style={{color:"#444",fontSize:"0.68rem",margin:"0 0 0.75rem",textAlign:"right"}}>Build: 2026-06-27-order-fix-v6</p>
+      <p style={{color:"#444",fontSize:"0.68rem",margin:"0 0 0.75rem",textAlign:"right"}}>Build: 2026-06-27-debug-v7</p>
       {/* Week start */}
       <div style={{...S.card,marginBottom:"1rem"}}>
         <label style={{color:"#a89f8c",fontSize:"0.82rem",letterSpacing:"0.08em",textTransform:"uppercase",display:"block",marginBottom:"0.75rem"}}>📅 Week starts on</label>
