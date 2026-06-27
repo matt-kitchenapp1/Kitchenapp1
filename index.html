@@ -1151,6 +1151,28 @@ function PlannerTab({ recipes, family, prefs, freezer, freezerIngredients, showT
                   style={{...S.primaryBtn, background:"#1a3a1a", color:"#4ade80", border:"1px solid #4ade80"}}>
                   🛒 Build Shopping List
                 </button>
+                <button onClick={()=>{
+                  const normaliseText = (t) => t.toLowerCase().replace(/[^a-z0-9\s]/g," ").replace(/\b\d+(\.\d+)?\b/g,"").replace(/\s+/g," ").trim();
+                  const lookup = (itemText) => {
+                    const itemNorm = normaliseText(itemText);
+                    let bestIdx = -1, bestScore = 0, bestFav = "";
+                    favourites.forEach((f,idx)=>{
+                      const favNorm = normaliseText(f.text);
+                      if (!favNorm) return;
+                      if (itemNorm.includes(favNorm) || favNorm.includes(itemNorm)) {
+                        const score = favNorm.length;
+                        if (score>bestScore) { bestScore=score; bestIdx=idx; bestFav=f.text; }
+                      }
+                    });
+                    return {idx:bestIdx, fav:bestFav};
+                  };
+                  const porkResult = lookup("500 g Pork Mince");
+                  const potatoResult = lookup("4 potatoes");
+                  const firstFav = favourites[0]?.text||"NONE";
+                  const msg = `1st fav: "${firstFav}" | Pork Mince→idx ${porkResult.idx} ("${porkResult.fav}") | potatoes→idx ${potatoResult.idx} ("${potatoResult.fav}") | total favs: ${favourites.length}`;
+                  console.log(msg);
+                  showToast(msg, "#60a5fa");
+                }} style={{...S.smallBtn,background:"transparent",color:"#60a5fa",border:"1px solid #60a5fa",fontSize:"0.7rem"}}>🔍 Test Lookup</button>
                 <button onClick={()=>setStep("schedule")} style={{...S.primaryBtn,background:"#2a2a2a",color:"#aaa"}}>Regenerate</button>
                 <button onClick={clearPlan} style={{...S.smallBtn,background:"transparent",color:"#f87171",border:"1px solid #f87171"}}>Clear</button>
               </div>
@@ -2087,7 +2109,7 @@ function SettingsTab({ prefs, savePrefs, weekStart, saveWeekStart, itemPrefs, sa
   return (
     <div>
       {/* Build version marker — for confirming the latest deploy is live */}
-      <p style={{color:"#444",fontSize:"0.68rem",margin:"0 0 0.75rem",textAlign:"right"}}>Build: 2026-06-27-dedupe-fix-v4</p>
+      <p style={{color:"#444",fontSize:"0.68rem",margin:"0 0 0.75rem",textAlign:"right"}}>Build: 2026-06-27-debug-v5</p>
       {/* Week start */}
       <div style={{...S.card,marginBottom:"1rem"}}>
         <label style={{color:"#a89f8c",fontSize:"0.82rem",letterSpacing:"0.08em",textTransform:"uppercase",display:"block",marginBottom:"0.75rem"}}>📅 Week starts on</label>
