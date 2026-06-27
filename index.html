@@ -617,6 +617,10 @@ function PlannerTab({ recipes, family, prefs, freezer, freezerIngredients, showT
       if (favB!==-1) return 1;
       return getCategoryOrder(a) - getCategoryOrder(b);
     });
+    console.log("=== rebuildShopping DEBUG ===");
+    console.log("favourites count at sort time:", favourites?.length);
+    console.log("first 10 favourites:", favourites?.slice(0,10).map(f=>f.text));
+    console.log("consolidated after sort:", consolidated.map(c=>c.text));
 
     // ── Step 5: Build final shopping items ────────────────────────────────
     const raw = consolidated.map(({text, section})=>({
@@ -1140,6 +1144,12 @@ function PlannerTab({ recipes, family, prefs, freezer, freezerIngredients, showT
                   style={{...S.primaryBtn, background:"#1a3a1a", color:"#4ade80", border:"1px solid #4ade80"}}>
                   🛒 Build Shopping List
                 </button>
+                <button onClick={()=>{
+                  console.log("=== DEBUG: favourites array ===", JSON.stringify(favourites));
+                  console.log("=== DEBUG: favourites.length ===", favourites.length);
+                  const sample = favourites.slice(0,5).map(f=>f.text).join(", ");
+                  showToast("Favourites ("+favourites.length+"): "+sample, "#60a5fa");
+                }} style={{...S.smallBtn,background:"transparent",color:"#60a5fa",border:"1px solid #60a5fa"}}>🔍 Debug Favs</button>
                 <button onClick={()=>setStep("schedule")} style={{...S.primaryBtn,background:"#2a2a2a",color:"#aaa"}}>Regenerate</button>
                 <button onClick={clearPlan} style={{...S.smallBtn,background:"transparent",color:"#f87171",border:"1px solid #f87171"}}>Clear</button>
               </div>
@@ -2064,7 +2074,7 @@ function SettingsTab({ prefs, savePrefs, weekStart, saveWeekStart, itemPrefs, sa
   return (
     <div>
       {/* Build version marker — for confirming the latest deploy is live */}
-      <p style={{color:"#444",fontSize:"0.68rem",margin:"0 0 0.75rem",textAlign:"right"}}>Build: 2026-06-27-fav-sort-v2</p>
+      <p style={{color:"#444",fontSize:"0.68rem",margin:"0 0 0.75rem",textAlign:"right"}}>Build: 2026-06-27-debug-v3</p>
       {/* Week start */}
       <div style={{...S.card,marginBottom:"1rem"}}>
         <label style={{color:"#a89f8c",fontSize:"0.82rem",letterSpacing:"0.08em",textTransform:"uppercase",display:"block",marginBottom:"0.75rem"}}>📅 Week starts on</label>
