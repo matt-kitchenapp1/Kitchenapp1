@@ -2063,6 +2063,8 @@ function SettingsTab({ prefs, savePrefs, weekStart, saveWeekStart, itemPrefs, sa
 
   return (
     <div>
+      {/* Build version marker — for confirming the latest deploy is live */}
+      <p style={{color:"#444",fontSize:"0.68rem",margin:"0 0 0.75rem",textAlign:"right"}}>Build: 2026-06-27-fav-sort-v2</p>
       {/* Week start */}
       <div style={{...S.card,marginBottom:"1rem"}}>
         <label style={{color:"#a89f8c",fontSize:"0.82rem",letterSpacing:"0.08em",textTransform:"uppercase",display:"block",marginBottom:"0.75rem"}}>📅 Week starts on</label>
