@@ -1151,28 +1151,6 @@ function PlannerTab({ recipes, family, prefs, freezer, freezerIngredients, showT
                   style={{...S.primaryBtn, background:"#1a3a1a", color:"#4ade80", border:"1px solid #4ade80"}}>
                   🛒 Build Shopping List
                 </button>
-                <button onClick={()=>{
-                  const normaliseText = (t) => t.toLowerCase().replace(/[^a-z0-9\s]/g," ").replace(/\b\d+(\.\d+)?\b/g,"").replace(/\s+/g," ").trim();
-                  const lookup = (itemText) => {
-                    const itemNorm = normaliseText(itemText);
-                    let bestIdx = -1, bestScore = 0, bestFav = "";
-                    favourites.forEach((f,idx)=>{
-                      const favNorm = normaliseText(f.text);
-                      if (!favNorm) return;
-                      if (itemNorm.includes(favNorm) || favNorm.includes(itemNorm)) {
-                        const score = favNorm.length;
-                        if (score>bestScore) { bestScore=score; bestIdx=idx; bestFav=f.text; }
-                      }
-                    });
-                    return {idx:bestIdx, fav:bestFav};
-                  };
-                  const porkResult = lookup("500 g Pork Mince");
-                  const potatoResult = lookup("4 potatoes");
-                  const firstFav = favourites[0]?.text||"NONE";
-                  const msg = `1st fav: "${firstFav}" | Pork Mince→idx ${porkResult.idx} ("${porkResult.fav}") | potatoes→idx ${potatoResult.idx} ("${potatoResult.fav}") | total favs: ${favourites.length}`;
-                  console.log(msg);
-                  showToast(msg, "#60a5fa");
-                }} style={{...S.smallBtn,background:"transparent",color:"#60a5fa",border:"1px solid #60a5fa",fontSize:"0.7rem"}}>🔍 Test Lookup</button>
                 <button onClick={()=>setStep("schedule")} style={{...S.primaryBtn,background:"#2a2a2a",color:"#aaa"}}>Regenerate</button>
                 <button onClick={clearPlan} style={{...S.smallBtn,background:"transparent",color:"#f87171",border:"1px solid #f87171"}}>Clear</button>
               </div>
@@ -1271,17 +1249,31 @@ function ShoppingTab({ shopping, saveShopping, favourites, saveFavourites, itemP
     setNewFav(""); showToast("Favourite saved ✓");
   };
   const removeFav = async id => { await saveFavourites(favourites.filter(f=>f.id!==id)); };
+  // Re-sort the full favourites array so items are grouped by category in the
+  // category list's order, with original relative order preserved within each group.
+  // This keeps the underlying array order in sync with what's displayed (and with
+  // what the shopping list sort uses), so moving an item up/down within its category
+  // actually changes its real position relative to ALL favourites, not just same-category ones.
+  const reorderByCategory = (favs) => {
+    const byCat = {};
+    favs.forEach(f=>{ const c=f.category||"Other"; (byCat[c]=byCat[c]||[]).push(f); });
+    const orderedCats = [...categories, ...Object.keys(byCat).filter(c=>!categories.includes(c))];
+    const result = [];
+    orderedCats.forEach(c=>{ if (byCat[c]) result.push(...byCat[c]); });
+    return result;
+  };
+
   const moveFav = async (id, dir) => {
-    const fav = favourites.find(f=>f.id===id); if(!fav) return;
-    const sameCat = favourites.filter(f=>f.category===fav.category);
+    const ordered = reorderByCategory(favourites);
+    const fav = ordered.find(f=>f.id===id); if(!fav) return;
+    const sameCat = ordered.filter(f=>f.category===fav.category);
     const idx = sameCat.findIndex(f=>f.id===id);
     const swapIdx = idx+dir;
     if (swapIdx<0||swapIdx>=sameCat.length) return;
     const otherFav = sameCat[swapIdx];
-    // Swap their positions within the full favourites array
-    const fullIdx1 = favourites.findIndex(f=>f.id===fav.id);
-    const fullIdx2 = favourites.findIndex(f=>f.id===otherFav.id);
-    const updated = [...favourites];
+    const fullIdx1 = ordered.findIndex(f=>f.id===fav.id);
+    const fullIdx2 = ordered.findIndex(f=>f.id===otherFav.id);
+    const updated = [...ordered];
     [updated[fullIdx1], updated[fullIdx2]] = [updated[fullIdx2], updated[fullIdx1]];
     await saveFavourites(updated);
   };
@@ -1332,16 +1324,29 @@ function ShoppingTab({ shopping, saveShopping, favourites, saveFavourites, itemP
       </button>
       {showFavs&&(
         <div style={{...S.card,marginBottom:"1rem"}}>
-          <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:"0.5rem"}}>
+          <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:"0.5rem",flexWrap:"wrap",gap:"0.4rem"}}>
             <h3 style={{...S.sectionHead,margin:0}}>Favourites ({favourites.length})</h3>
-            <button onClick={async()=>{
-              const deduped = dedupeFavs(favourites);
-              const removed = favourites.length - deduped.length;
-              await saveFavourites(deduped);
-              showToast(removed>0 ? `Removed ${removed} duplicate(s) ✓` : "No duplicates found","#4ade80");
-            }} style={{...S.smallBtn,background:"transparent",color:"#fbbf24",border:"1px solid #fbbf24",fontSize:"0.75rem"}}>
-              🧹 Clean up duplicates
-            </button>
+            <div style={{display:"flex",gap:"0.4rem",flexWrap:"wrap"}}>
+              <button onClick={async()=>{
+                const byCat = {};
+                favourites.forEach(f=>{ const c=f.category||"Other"; (byCat[c]=byCat[c]||[]).push(f); });
+                const orderedCats = [...categories, ...Object.keys(byCat).filter(c=>!categories.includes(c))];
+                const result = [];
+                orderedCats.forEach(c=>{ if (byCat[c]) result.push(...byCat[c]); });
+                await saveFavourites(result);
+                showToast("Favourites order fixed to match categories ✓","#4ade80");
+              }} style={{...S.smallBtn,background:"transparent",color:"#60a5fa",border:"1px solid #60a5fa",fontSize:"0.75rem"}}>
+                📐 Fix order now
+              </button>
+              <button onClick={async()=>{
+                const deduped = dedupeFavs(favourites);
+                const removed = favourites.length - deduped.length;
+                await saveFavourites(deduped);
+                showToast(removed>0 ? `Removed ${removed} duplicate(s) ✓` : "No duplicates found","#4ade80");
+              }} style={{...S.smallBtn,background:"transparent",color:"#fbbf24",border:"1px solid #fbbf24",fontSize:"0.75rem"}}>
+                🧹 Clean up duplicates
+              </button>
+            </div>
           </div>
           <div style={{display:"flex",gap:"0.5rem",marginBottom:"1rem",flexWrap:"wrap"}}>
             <input value={newFav} onChange={e=>setNewFav(e.target.value)} onKeyDown={e=>e.key==="Enter"&&addFav()}
@@ -2109,7 +2114,7 @@ function SettingsTab({ prefs, savePrefs, weekStart, saveWeekStart, itemPrefs, sa
   return (
     <div>
       {/* Build version marker — for confirming the latest deploy is live */}
-      <p style={{color:"#444",fontSize:"0.68rem",margin:"0 0 0.75rem",textAlign:"right"}}>Build: 2026-06-27-debug-v5</p>
+      <p style={{color:"#444",fontSize:"0.68rem",margin:"0 0 0.75rem",textAlign:"right"}}>Build: 2026-06-27-order-fix-v6</p>
       {/* Week start */}
       <div style={{...S.card,marginBottom:"1rem"}}>
         <label style={{color:"#a89f8c",fontSize:"0.82rem",letterSpacing:"0.08em",textTransform:"uppercase",display:"block",marginBottom:"0.75rem"}}>📅 Week starts on</label>
